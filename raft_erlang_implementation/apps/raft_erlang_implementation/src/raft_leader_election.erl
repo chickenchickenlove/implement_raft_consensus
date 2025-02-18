@@ -1,7 +1,9 @@
 -module(raft_leader_election).
 
 %% API
--export([]).
+-export([new_vote_arguments/4]).
+-export([can_vote/5]).
+-export([is_win/2]).
 
 -export_type([vote_arguments/0]).
 
@@ -20,9 +22,8 @@
 -type vote_arguments() ::
   {candidate_term(), candidate_id(), last_log_index(), last_log_term()}.
 
-new_vote_arguments(NodeName, NodeTerm) ->
-  {}
-
+new_vote_arguments(NodeName, NodeTerm, LastLogIndex, LastLogTerm) ->
+  {NodeTerm, NodeName, LastLogIndex, LastLogTerm}.
 
 
 start_election(Members, VoteArgs) ->
@@ -39,6 +40,16 @@ start_election(Members, VoteArgs) ->
     end, sets:to_list(FilteredMembers)).
 
 is_win(TotalMemberSize, VotedMemberCount) ->
-  VotedMemberCount >= TotalMemberSize div 2.
+  io:format("TotalMemberSize: ~p, VotedMemberCount: ~p~n", [TotalMemberSize, VotedMemberCount]),
+  VotedMemberCount >= ((TotalMemberSize div 2) + (TotalMemberSize rem 2)).
 
-can_vote(KnownTerm, Known)
+can_vote(VotedFor, KnownLastTerm, KnownLastLogIndex, VotedFor, VoteArgs) ->
+  {CandidateTerm, CandidateName, CandidateLastLogIndex, CandidateLastLogTerm} = VoteArgs,
+
+  case VotedFor of
+    undefined ->
+      CandidateTerm > CandidateLastLogIndex
+
+    ;
+    AlreadyVoted -> ok
+  end.

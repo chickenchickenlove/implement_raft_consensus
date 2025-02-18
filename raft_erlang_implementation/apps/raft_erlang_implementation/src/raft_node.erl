@@ -34,7 +34,7 @@
   % (initialized to 0, increases monotonically)
   match_index = 0 :: integer(),
 
-  raft :: raft(),
+  raft :: atom(),
 
   members = sets:new() :: sets:sets()
 }).
