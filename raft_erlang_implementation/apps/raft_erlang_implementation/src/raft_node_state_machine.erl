@@ -7,6 +7,7 @@
 %% API
 -export([init/1]).
 -export([start/2]).
+-export([stop/1]).
 -export([promote/2]).
 -export([held_leader_election/2]).
 -export([request_vote/2]).
@@ -77,9 +78,11 @@ start(NodeName, Members) ->
 
 request_vote(NodeName, VoteArgs) when is_atom(NodeName) ->
   Pid = whereis(NodeName),
-  gen_statem:call(Pid, {request_vote, VoteArgs});
+  % Should be cast. otherwise, deadlock occur.
+  % (Candidate A wait ack_voted from B, B wait ack_voted_from A)
+  gen_statem:cast(Pid, {request_vote, VoteArgs});
 request_vote(Pid, VoteArgs) when is_pid(Pid)->
-  gen_statem:call(Pid, {request_vote, VoteArgs}).
+  gen_statem:cast(Pid, {request_vote, VoteArgs}).
 
 promote(NodeName, VoteArgs) when is_atom(NodeName) ->
   Pid = whereis(NodeName),
@@ -116,50 +119,70 @@ init({NodeName, Members}) ->
   Data = #?MODULE{append_entry_timer=Timer, members=Members},
   {ok, State, Data}.
 
+stop(NodeName) ->
+  Pid = get_node_pid(NodeName),
+  gen_statem:stop(Pid).
+
+% 5.1 Raft Basics
+% The leader handles all client requests (if a client contacts a follower,
+% the follower redirects it to the leader).
+% TODO : implement redirect
 
 % TODO: Update event content.
 
-follower({call, From}, {append_entries, Entries}, Data0) ->
+% Append Entries Ack Implement.
+%% Results:
+%%  term: currentTerm, for leader to update itself
+%%  success: true if follower contained entry matching  prevLogIndex and prevLogTerm
 
+%% Receiver implementation:
+%% 1. Reply false if term < currentTerm (§5.1)
+%% 2. Reply false if log doesn’t contain an entry at prevLogIndex
+%%    whose term matches prevLogTerm (§5.3)
+%% 3. If an existing entry conflicts with a new one (same index but different terms),
+%%    delete the existing entry and all that follow it (§5.3)
+%% 4. Append any new entries not already in the log
+%% 5. If leaderCommit > commitIndex, set commitIndex
+
+follower({call, From}, {append_entries, Entries}, Data0) ->
+  Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
   %% TODO : Implement Detail.
-  ok;
+  {keep_state, Data0};
 
 follower(cast, election_timeout, Data0) ->
-  io:format("[~p] Node ~p got election_timeout. from now on, it is candidate follower.~n", [self(), self()]),
-  Timer = schedule_heartbeat_timeout(),
-  Data1 = replace_append_entry_timer(Data0, Timer),
+  io:format("[~p] Node ~p got election_timeout. from now on, it is candidate follower. leader election will be held in a few second. ~n", [self(), my_name()]),
+  Data1 = schedule_heartbeat_timeout_and_replace_previous_one(Data0),
   Data2 = clear_given_voted(Data1),
   Data3 = increase_current_term(Data2),
   Data4 = vote(self(), Data3),
   {next_state, candidate, Data4, {next_event, cast, start_leader_election}};
 
 follower({cast, From}, {promote, Args}, Data) ->
-  io:format("[~p] Node ~p got promote but it's follower. it is in somewhat inconsistency. It will be eventually resolved. ~n", [self(), self()]),
+  io:format("[~p] Node ~p got promote but it's follower. it is in somewhat inconsistency. It will be eventually resolved. ~n", [self(), my_name()]),
   % TODO : Detail implementation.
   {keep_state, Data, [{reply, From, candidate}]};
 
-follower(cast, {request_vote, {CandidateTerm, CandidateName, LastLogIndex, LastLogTerm}=VoteArgs}, Data0) ->
-  #?MODULE{current_term=CurrentTerm, voted_for=VotedFor, last_applied=LastAppliedIndex} = Data0,
-
+follower(cast, {request_vote, {CandidateTerm, CandidateName, _LastLogIndex, LastLogTerm}=VoteArgs}, Data0) ->
+  #?MODULE{current_term=CurrentTerm, voted_for=VotedFor, last_applied=LastAppliedIndex,
+           last_log_term=LastLogTerm} = Data0,
   Data1 =
-    case raft_leader_election:can_vote(VotedFor, CurrentTerm, LastAppliedIndex, VoteArgs) of
+    case CurrentTerm =< CandidateTerm of
+      % Ignore
+      false -> ok;
       true ->
-        % TODO: Send vote reply
-
-        % TODO: Term 업데이트 하는게 맞는지 확인 필요.
-        Data0#?MODULE{current_term=CandidateTerm, voted_for=CandidateName};
-      false ->
-        Data0
+        case raft_leader_election:can_vote(VotedFor, LastLogTerm, LastAppliedIndex, VoteArgs) of
+          true ->
+            % TODO: Send vote reply
+            ack_request_voted(CandidateName),
+            % TODO: Term 업데이트 하는게 맞는지 확인 필요.
+            Data0#?MODULE{current_term=CandidateTerm, voted_for=CandidateName};
+          false -> Data0
+        end
     end,
   % TODO : Detail implementation.
   {keep_state, Data1};
 
 follower(EventType, EventContent, Data) ->
-  io:format("Maybe here?
-  EventType: ~p
-  EventContent: ~p
-  Data: ~p
-  ~n", [EventType, EventContent, Data]),
   handle_event(EventType, EventContent, follower, Data).
 
 %%(a) it wins the election,
@@ -167,8 +190,10 @@ follower(EventType, EventContent, Data) ->
 %%(c) a period of time goes by with no winner. These outcomes are discussed separately in the paragraphs below
 
 % TODO: Update event content.
-candidate(cast, start_leader_election, Data0) ->
-  % Should consider deadlock?
+candidate(cast, start_leader_election, #?MODULE{current_term=CurrentTerm}=Data0) ->
+  io:format("[~p] Node ~p start leader election. Term is ~p.~n", [self(), my_name(), CurrentTerm]),
+  % Should consider deadlock.
+  % So, we DO NOT USE syncronous function.
   #?MODULE{members=Members, current_term=CurTerm,
            given_voted=GivenVoted,
            last_applied=LastAppliedIndex,
@@ -178,40 +203,50 @@ candidate(cast, start_leader_election, Data0) ->
     true -> {next_state, leader, Data0};
     false ->
       ToMembers = get_members_except_me(Members),
-      VoteArgs = raft_leader_election:new_vote_arguments(self(), CurTerm, LastAppliedIndex, LastLogTerm),
-      lists:foreach(
-        fun(MemberPid) ->
-          try
-            request_vote(MemberPid, VoteArgs)
-          catch
-             exit:{noproc, _}  -> io:format("There is no such registred process ~p yet. ~n", [MemberPid])
-          end
-        end, sets:to_list(ToMembers)),
+      VoteArgs = raft_leader_election:new_vote_arguments(my_name(), CurTerm, LastAppliedIndex, LastLogTerm),
 
-      io:format("START_LEADER_ELECTION !!!!!~n", []),
+      RequestVoteIfNodeIsExisted = fun(MemberPid) ->
+                                     try
+                                       request_vote(MemberPid, VoteArgs)
+                                     catch
+                                       exit:{noproc, _}  -> io:format("There is no such registred process ~p yet. ~n", [MemberPid])
+                                     end
+                                   end,
+      lists:foreach(RequestVoteIfNodeIsExisted, sets:to_list(ToMembers)),
       {keep_state, Data0}
   end;
 
-candidate({call, From}, {voted, FromName}, Data0) ->
-  % TODO : 뒤늦게 응답이 오는 경우도 있을 수 있음. 그때는 무시해야함.
-  {keep_state, Data0, [{reply, From, candidate}]};
+candidate(cast, {ack_request_voted, FromName}, Data0) ->
+  io:format("[~p] the node ~p got ack_request_voted from ~p.~n", [self(), my_name(), FromName]),
+  #?MODULE{given_voted=GivenVoted0, members=Members} = Data0,
+  GivenVoted1 = sets:add_element(FromName, GivenVoted0),
+  Data1 = Data0#?MODULE{given_voted=GivenVoted1},
+  GivenVotedSize = sets:size(GivenVoted1),
+  MemberSize = sets:size(Members),
 
-candidate({call, From}, {append_entries, Entries}, Data0) ->
-  %% TODO : Implement Detail.
-  {next_state, follower, Data0, [{reply, From, follower}]};
+  case raft_leader_election:is_win(MemberSize, GivenVotedSize) of
+    true ->
+      io:format("[~p] the node ~p win the leader election. ~n", [self(), my_name()]),
+      {next_state, leader, Data1};
+    false -> {keep_state, Data1}
+  end;
 
-candidate({call, From}, election_timeout, Data0) ->
-  io:format("[~p] Node ~p got leader_election but it is already candidate. it is in somewhat inconsistency. It will be eventually resolved. ~n", [self(), self()]),
-  % TODO : Should be ignore
-  {keep_state, Data0, [{reply, From, candidate}]};
+% In some situations an election will result in a split vote. In this case the term
+% will end with no leader; a new term (with a new election) will begin shortly.
+% Raft ensures that there is at most one leader in a given term.
+candidate(cast, election_timeout, Data0) ->
+  io:format("[~p] the node ~p got election_timeout as candidate. this node fail to win leader election. so it turns to follower. ~n", [self(), my_name()]),
+  Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
+  {next_state, follower, Data1};
 
 % While waiting for votes, a candidate may receive an AppendEntries RPC from another server claiming to be leader.
 % If the leader’s term (included in its RPC) is at least as large as the candidate’s current term,
 % then the candidate recognizes the leader as legitimate and returns to follower state.
 % If the term in the RPC is smaller than the candidate’s current term, then the candidate rejects the RPC and continues in candidate state.
-candidate(cast, {append_entries, NewLogs}, Data0) ->
-  % TODO: Implement detail in terms of append entries.
-  {next_state, follower, Data0};
+candidate({call, From}, {append_entries, Entries}, Data0) ->
+  Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
+  %% TODO : Implement Detail.
+  {next_state, follower, Data0, [{reply, From, follower}]};
 
 % The third possible outcome is that a candidate neither wins nor loses the election: if many followers become candidates at the same time,
 % votes could be split so that no candidate obtains a majority. When this happens, each candidate will time out and start a new election by incrementing
@@ -240,6 +275,21 @@ candidate(EventType, EventContent, Data) ->
   handle_event(EventType, EventContent, candidate, Data).
 
 % TODO: Update event content.
+%% Append Entries (LEADER Implementation) -> Normally async.
+%% Arguments:
+%%  term: leader’s term
+%%  leaderId: so follower can redirect clients
+%%  prevLogIndex: index of log entry immediately preceding new ones
+%%  prevLogTerm:  term of prevLogIndex entry
+%%  entries[]: log entries to store (empty for heartbeat; may send more than one for efficiency)
+%%  leaderCommit leader’s commitIndex
+%% Results:
+%%  term: currentTerm, for leader to update itself
+%%  success: true if follower contained entry matching prevLogIndex and prevLogTerm
+leader(cast, start_append_entries, Data0) ->
+  ok;
+
+
 leader({call, From}, election_timeout, Data0) ->
   io:format("[~p] Node ~p got leader_election but it is already candidate. it is in somewhat inconsistency. It will be eventually resolved. ~n", [self(), self()]),
   % TODO : Should be ignore
@@ -290,18 +340,39 @@ increase_current_term(Data0) ->
   #?MODULE{current_term=CurrentTerm} = Data0,
   Data0#?MODULE{current_term=CurrentTerm + 1}.
 
-my_name() ->
-  whereis(self()).
-
+ack_request_voted(CandidateName) ->
+  io:format("ack_request_voted CAndidateName: ~p~n", [CandidateName]),
+  ToPid = get_node_pid(CandidateName),
+  gen_statem:cast(ToPid, {ack_request_voted, my_name()}).
 
 %%% Schedule function.
 jitter_election_timeout() ->
   Jitter = rand:uniform(150),
-  150 + Jitter.
+  raft_util:get_timer_time() + Jitter.
 
 schedule_heartbeat_timeout() ->
   {ok, Timer} = timer:apply_after(jitter_election_timeout(), gen_statem, cast, [self(), election_timeout]),
   Timer.
+
+schedule_heartbeat_timeout_and_replace_previous_one(Data) ->
+  {ok, Timer} = timer:apply_after(jitter_election_timeout(), gen_statem, cast, [self(), election_timeout]),
+  io:format("Timere here ~n", []),
+  Data#?MODULE{append_entry_timer=Timer}.
+
+schedule_heartbeat_timeout_and_cancel_previous_one(Data) ->
+  #?MODULE{append_entry_timer=PreviousTimer} = Data,
+  timer:cancel(PreviousTimer),
+  {ok, Timer} = timer:apply_after(jitter_election_timeout(), gen_statem, cast, [self(), election_timeout]),
+  Data#?MODULE{append_entry_timer=Timer}.
+
+%%schedule_append_entries(Data) ->
+%%  timer:apply_after(jitter_election_timeout(), gen_statem, cast, [self(), {append_entries}])
+%%  #?MODULE.
+
+
+
+
+
 
 remove_append_entry_timer(Data0) ->
   Data0#?MODULE{append_entry_timer=undefined}.
@@ -314,6 +385,15 @@ get_members_except_me(Members) ->
   sets:del_element(MyName, Members).
 
 get_node_name_by_pid(Pid) ->
+  case erlang:process_info(Pid, registered_name) of
+    {registered_name, Name} -> Name;
+    _ -> undefined
+  end.
+
+my_name() ->
+  node_name(self()).
+
+node_name(Pid) ->
   case erlang:process_info(Pid, registered_name) of
     {registered_name, Name} -> Name;
     _ -> undefined
