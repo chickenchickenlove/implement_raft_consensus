@@ -144,6 +144,11 @@ stop(NodeName) ->
 %% 4. Append any new entries not already in the log
 %% 5. If leaderCommit > commitIndex, set commitIndex
 
+
+%%% Follower should reset its election timeout when it receive valid RPC.
+%%%   1) AppendEntries RPC from valid leader.
+%%%   2) Request Voted RPC from valid candidate.
+%%%   3) InstallSnapshot RPC from valid leader.
 follower({call, From}, {append_entries, Entries}, Data0) ->
   Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
   %% TODO : Implement Detail.
@@ -167,16 +172,21 @@ follower(cast, {request_vote, {CandidateTerm, CandidateName, _LastLogIndex, Last
            last_log_term=LastLogTerm} = Data0,
   Data1 =
     case CurrentTerm =< CandidateTerm of
-      % Ignore
+      % Invalidate Candidate
       false -> ok;
       true ->
         case raft_leader_election:can_vote(VotedFor, LastLogTerm, LastAppliedIndex, VoteArgs) of
           true ->
+            % Valid RPC, so election timeout should be refreshed.
             % TODO: Send vote reply
-            ack_request_voted(CandidateName),
-            % TODO: Term 업데이트 하는게 맞는지 확인 필요.
-            Data0#?MODULE{current_term=CandidateTerm, voted_for=CandidateName};
-          false -> Data0
+            Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
+            Data2 = Data1#?MODULE{current_term=CandidateTerm, voted_for=CandidateName},
+            #?MODULE{current_term=CurrentTerm1} = Data2,
+            ack_request_voted(CandidateName, CurrentTerm1, true),
+            Data2;
+          false ->
+            % Invalid RPC, so election timeout shold not be refreshed.
+            Data0
         end
     end,
   % TODO : Detail implementation.
@@ -244,9 +254,18 @@ candidate(cast, election_timeout, Data0) ->
 % then the candidate recognizes the leader as legitimate and returns to follower state.
 % If the term in the RPC is smaller than the candidate’s current term, then the candidate rejects the RPC and continues in candidate state.
 candidate({call, From}, {append_entries, Entries}, Data0) ->
-  Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
-  %% TODO : Implement Detail.
-  {next_state, follower, Data0, [{reply, From, follower}]};
+  #?MODULE{current_term=CurrentTerm} = Data0,
+  TermFromLeader = raft_append_entries_rpc:get(term, Entries),
+  case CurrentTerm =< TermFromLeader of
+    true ->
+      %% TODO : Implement Detail.
+      %% For example, add commited log its local state.
+      Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
+      {next_state, follower, Data1, [{reply, From, follower}]};
+    false ->
+      %% TODO : 응답을 보내줘야 할 수도 있음. 그래야 오래된 리더가 다시 Follower로 갈 수 있도록.
+      {keep_state, Data0}
+  end;
 
 % The third possible outcome is that a candidate neither wins nor loses the election: if many followers become candidates at the same time,
 % votes could be split so that no candidate obtains a majority. When this happens, each candidate will time out and start a new election by incrementing
@@ -340,10 +359,20 @@ increase_current_term(Data0) ->
   #?MODULE{current_term=CurrentTerm} = Data0,
   Data0#?MODULE{current_term=CurrentTerm + 1}.
 
-ack_request_voted(CandidateName) ->
+
+%%  Results:
+%%   term: currentTerm, for candidate to update itself
+%%   voteGranted: true means candidate received vote
+
+%% Receiver implementation:
+%%  1. Reply false if term < currentTerm (§5.1)
+%%  2. If votedFor is null or candidateId, and candidate’s log is at
+%%     least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
+ack_request_voted(CandidateName, CurrentTerm, VoteGranted) ->
   io:format("ack_request_voted CAndidateName: ~p~n", [CandidateName]),
   ToPid = get_node_pid(CandidateName),
-  gen_statem:cast(ToPid, {ack_request_voted, my_name()}).
+  RequestVoteRpc = raft_request_vote_rpc:new(CurrentTerm, VoteGranted, my_name()),
+  gen_statem:cast(ToPid, RequestVoteRpc).
 
 %%% Schedule function.
 jitter_election_timeout() ->
@@ -401,3 +430,4 @@ node_name(Pid) ->
 
 get_node_pid(NodeName) ->
   whereis(NodeName).
+
