@@ -18,6 +18,8 @@
 -export([get_state/1]).
 -export([get_voted_count/1]).
 -export([get_current_term/1]).
+-export([get_timer/1]).
+-export([get_voted_for/1]).
 
 %% State Function
 -export([follower/3]).
@@ -97,6 +99,12 @@ held_leader_election(Pid, VoteArgs) when is_pid(Pid)->
   gen_statem:call(Pid, {leader_election, VoteArgs}).
 
 %%% For Test
+get_timer(Pid) ->
+  gen_statem:call(Pid, get_timer).
+
+get_voted_for(Pid) ->
+  gen_statem:call(Pid, get_voted_for).
+
 get_state(Pid) ->
   gen_statem:call(Pid, get_state).
 
@@ -167,13 +175,15 @@ follower({cast, From}, {promote, Args}, Data) ->
   % TODO : Detail implementation.
   {keep_state, Data, [{reply, From, candidate}]};
 
-follower(cast, {request_vote, {CandidateTerm, CandidateName, _LastLogIndex, LastLogTerm}=VoteArgs}, Data0) ->
+follower(cast, {request_vote, {CandidateTerm, CandidateName, _CandidateLastLogIndex, _CandidateLastLogTerm}=VoteArgs}, Data0) ->
   #?MODULE{current_term=CurrentTerm, voted_for=VotedFor, last_applied=LastAppliedIndex,
            last_log_term=LastLogTerm} = Data0,
-  Data1 =
+  Data =
     case CurrentTerm =< CandidateTerm of
       % Invalidate Candidate
-      false -> ok;
+      false ->
+        ack_request_voted(CandidateName, CurrentTerm, false),
+        Data0;
       true ->
         case raft_leader_election:can_vote(VotedFor, LastLogTerm, LastAppliedIndex, VoteArgs) of
           true ->
@@ -181,16 +191,16 @@ follower(cast, {request_vote, {CandidateTerm, CandidateName, _LastLogIndex, Last
             % TODO: Send vote reply
             Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
             Data2 = Data1#?MODULE{current_term=CandidateTerm, voted_for=CandidateName},
-            #?MODULE{current_term=CurrentTerm1} = Data2,
-            ack_request_voted(CandidateName, CurrentTerm1, true),
+            ack_request_voted(CandidateName, CandidateTerm, true),
             Data2;
           false ->
-            % Invalid RPC, so election timeout shold not be refreshed.
+            % Invalid RPC, so election timeout should not be refreshed.
+            ack_request_voted(CandidateName, CurrentTerm, false),
             Data0
         end
     end,
   % TODO : Detail implementation.
-  {keep_state, Data1};
+  {keep_state, Data};
 
 follower(EventType, EventContent, Data) ->
   handle_event(EventType, EventContent, follower, Data).
@@ -226,8 +236,8 @@ candidate(cast, start_leader_election, #?MODULE{current_term=CurrentTerm}=Data0)
       {keep_state, Data0}
   end;
 
-candidate(cast, {ack_request_voted, FromName}, Data0) ->
-  io:format("[~p] the node ~p got ack_request_voted from ~p.~n", [self(), my_name(), FromName]),
+candidate(cast, {ack_request_voted, FromName, CurrentTerm, true}, Data0) ->
+  io:format("[~p] the node ~p got ack_request_voted from ~p. Got grant true. ~n", [self(), my_name(), FromName]),
   #?MODULE{given_voted=GivenVoted0, members=Members} = Data0,
   GivenVoted1 = sets:add_element(FromName, GivenVoted0),
   Data1 = Data0#?MODULE{given_voted=GivenVoted1},
@@ -236,10 +246,30 @@ candidate(cast, {ack_request_voted, FromName}, Data0) ->
 
   case raft_leader_election:is_win(MemberSize, GivenVotedSize) of
     true ->
-      io:format("[~p] the node ~p win the leader election. ~n", [self(), my_name()]),
-      {next_state, leader, Data1};
+      io:format("[~p] the node ~p win the leader election. term is ~p.~n", [self(), my_name(), CurrentTerm]),
+      Data2 = Data1#?MODULE{given_voted=sets:new()},
+      {next_state, leader, Data2};
     false -> {keep_state, Data1}
   end;
+
+candidate(cast, {ack_request_voted, FromName, _CurrentTerm, false}, Data0) ->
+  io:format("[~p] the node ~p got ack_request_voted from ~p. Got grant false. ~n", [self(), my_name(), FromName]),
+  {keep_state, Data0};
+
+%%candidate(cast, {ack_request_voted, FromName, CurrentTerm, VoteGranted}, Data0) ->
+%%  io:format("[~p] the node ~p got ack_request_voted from ~p.~n", [self(), my_name(), FromName]),
+%%  #?MODULE{given_voted=GivenVoted0, members=Members} = Data0,
+%%  GivenVoted1 = sets:add_element(FromName, GivenVoted0),
+%%  Data1 = Data0#?MODULE{given_voted=GivenVoted1},
+%%  GivenVotedSize = sets:size(GivenVoted1),
+%%  MemberSize = sets:size(Members),
+%%
+%%  case raft_leader_election:is_win(MemberSize, GivenVotedSize) of
+%%    true ->
+%%      io:format("[~p] the node ~p win the leader election. ~n", [self(), my_name()]),
+%%      {next_state, leader, Data1};
+%%    false -> {keep_state, Data1}
+%%  end;
 
 % In some situations an election will result in a split vote. In this case the term
 % will end with no leader; a new term (with a new election) will begin shortly.
@@ -331,6 +361,9 @@ leader(EventType, EventContent, Data) ->
   handle_event(EventType, EventContent, leader, Data).
 
 %%{next_state, follower, Data, [{reply, From, candidate}]};
+handle_event({call, From}, get_timer, State, Data) ->
+  #?MODULE{append_entry_timer=Timer}=Data,
+  {keep_state, Data, [{reply, From, Timer}]};
 handle_event({call, From}, get_state, State, Data) ->
   {keep_state, Data, [{reply, From, State}]};
 
@@ -342,6 +375,10 @@ handle_event({call, From}, get_voted_count, _State, Data) ->
 handle_event({call, From}, get_current_term, _State, Data) ->
   #?MODULE{current_term=CurrentTerm} = Data,
   {keep_state, Data, [{reply, From, CurrentTerm}]};
+
+handle_event({call, From}, get_voted_for, _State, Data) ->
+  #?MODULE{voted_for=VotedFor} = Data,
+  {keep_state, Data, [{reply, From, VotedFor}]};
 
 handle_event(EventType, EventCount, State, Data) ->
   %% Ignore all other events.
@@ -369,9 +406,9 @@ increase_current_term(Data0) ->
 %%  2. If votedFor is null or candidateId, and candidate’s log is at
 %%     least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
 ack_request_voted(CandidateName, CurrentTerm, VoteGranted) ->
-  io:format("ack_request_voted CAndidateName: ~p~n", [CandidateName]),
+  io:format("ack_request_voted CandidateName: ~p~n", [CandidateName]),
   ToPid = get_node_pid(CandidateName),
-  RequestVoteRpc = raft_request_vote_rpc:new(CurrentTerm, VoteGranted, my_name()),
+  RequestVoteRpc = raft_request_vote_rpc:new_ack(CurrentTerm, VoteGranted, my_name()),
   gen_statem:cast(ToPid, RequestVoteRpc).
 
 %%% Schedule function.
@@ -397,11 +434,6 @@ schedule_heartbeat_timeout_and_cancel_previous_one(Data) ->
 %%schedule_append_entries(Data) ->
 %%  timer:apply_after(jitter_election_timeout(), gen_statem, cast, [self(), {append_entries}])
 %%  #?MODULE.
-
-
-
-
-
 
 remove_append_entry_timer(Data0) ->
   Data0#?MODULE{append_entry_timer=undefined}.
