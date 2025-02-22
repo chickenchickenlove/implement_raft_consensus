@@ -5,6 +5,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%%% TODO: There is no guarantee for specified node to become leader. So, this test code is invalid.
+%%%% TODO: When AppendEntries RPC is implemented, we can make this test ensure.
 %%%%% NOT ACTUALLY Implemented.
 %%%%% NODE A vote to itself, Node B also vote to A.
 %%candidate_become_leader_eventually_after_split_vote_test() ->

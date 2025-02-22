@@ -3,6 +3,10 @@
 -behavior(gen_statem).
 
 %%% Reference : https://raft.github.io/raft.pdf
+%%% Reference2 : https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf
+%%% pseudo code : https://github.com/ongardie/raft-pseudocode
+
+-include("rpc_record.hrl").
 
 %% API
 -export([init/1]).
@@ -30,6 +34,11 @@
   follower |
   leader |
   candidate.
+
+%%%%%%%%%%%%%%%%%% NOTE %%%%%%%%%%%%%%%%%%%%%
+% Follower remains in follower state as long as it receives valid RPCs from a leader or candidate.
+
+-define(STATE, ?MODULE).
 
 -record(?MODULE, {
   %%% Persistent state on all servers. (Updated on stable storage before responding to RPCs)
@@ -162,65 +171,79 @@ follower({call, From}, {append_entries, Entries}, Data0) ->
   %% TODO : Implement Detail.
   {keep_state, Data0};
 
-follower(cast, election_timeout, Data0) ->
+follower(cast, election_timeout, Data) ->
   io:format("[~p] Node ~p got election_timeout. from now on, it is candidate follower. leader election will be held in a few second. ~n", [self(), my_name()]),
-  Data1 = schedule_heartbeat_timeout_and_replace_previous_one(Data0),
-  Data2 = clear_given_voted(Data1),
-  Data3 = increase_current_term(Data2),
-  Data4 = vote(self(), Data3),
-  {next_state, candidate, Data4, {next_event, cast, start_leader_election}};
+  {next_state, candidate, Data, {next_event, cast, start_leader_election}};
 
 follower({cast, From}, {promote, Args}, Data) ->
   io:format("[~p] Node ~p got promote but it's follower. it is in somewhat inconsistency. It will be eventually resolved. ~n", [self(), my_name()]),
   % TODO : Detail implementation.
   {keep_state, Data, [{reply, From, candidate}]};
 
-follower(cast, {request_vote, {CandidateTerm, CandidateName, _CandidateLastLogIndex, _CandidateLastLogTerm}=VoteArgs}, Data0) ->
-  #?MODULE{current_term=CurrentTerm, voted_for=VotedFor, last_applied=LastAppliedIndex,
-           last_log_term=LastLogTerm} = Data0,
-  Data =
-    case CurrentTerm =< CandidateTerm of
-      % Invalidate Candidate
-      false ->
-        ack_request_voted(CandidateName, CurrentTerm, false),
-        Data0;
-      true ->
-        case raft_leader_election:can_vote(VotedFor, LastLogTerm, LastAppliedIndex, VoteArgs) of
-          true ->
-            % Valid RPC, so election timeout should be refreshed.
-            % TODO: Send vote reply
-            Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
-            Data2 = Data1#?MODULE{current_term=CandidateTerm, voted_for=CandidateName},
-            ack_request_voted(CandidateName, CandidateTerm, true),
-            Data2;
-          false ->
-            % Invalid RPC, so election timeout should not be refreshed.
-            ack_request_voted(CandidateName, CurrentTerm, false),
-            Data0
-        end
+% Each server will vote for at most one candidate in a given term, on a `first-come-first-served basis`.
+% 1. If Candidate Term is higher than me, vote.
+% 2. If both Candidate term and my term are same, follow this prioirty
+%   2.1 Bigger Last Log Term.
+%   2.2 If Last Log Term is same, Bigger Last Log Index
+
+%% Receiver implementation:
+%%   1. Reply false if term < currentTerm (§5.1)
+%%   2. If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
+
+follower(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted},
+    #?MODULE{current_term=CurrentTerm}=Data0) ->
+  case CurrentTerm < ResponseTerm of
+    true -> step_down(ResponseTerm, Data0);
+    false -> {keep_state, Data0}
+  end;
+
+follower(cast, {request_vote, VoteArgs}, #?MODULE{current_term=CurrentTerm0}=Data0) ->
+  #vote_args{candidate_name=CandidateName, candidate_term=CandidateTerm} = VoteArgs,
+  Data1 =
+    case CurrentTerm0 < CandidateTerm of
+      true -> Data0#?MODULE{current_term=CandidateTerm, voted_for=undefined};
+      false -> Data0
     end,
-  % TODO : Detail implementation.
-  {keep_state, Data};
+
+  #?MODULE{voted_for=VotedFor,
+           current_term=CurrentTerm,
+           last_applied=FollowerLogLastIndex,
+           last_log_term=FollowerLogLastTerm} = Data1,
+
+  case raft_leader_election:can_vote(VotedFor, CurrentTerm, FollowerLogLastTerm, FollowerLogLastIndex, VoteArgs) of
+    true ->
+      Data2 = schedule_heartbeat_timeout_and_cancel_previous_one(Data1),
+      Data3 = vote(CandidateName, CurrentTerm, Data2),
+      ack_request_voted(CandidateName, CurrentTerm, true),
+      {keep_state, Data3};
+    false ->
+      ack_request_voted(CandidateName, CurrentTerm, false),
+      {keep_state, Data1}
+  end;
 
 follower(EventType, EventContent, Data) ->
   handle_event(EventType, EventContent, follower, Data).
 
-%%(a) it wins the election,
-%%(b) another server establishes itself as leader
-%%(c) a period of time goes by with no winner. These outcomes are discussed separately in the paragraphs below
+%% (a) it wins the election,
+%% (b) another server establishes itself as leader
+%% (c) a period of time goes by with no winner. These outcomes are discussed separately in the paragraphs below
 
 % TODO: Update event content.
 candidate(cast, start_leader_election, #?MODULE{current_term=CurrentTerm}=Data0) ->
   io:format("[~p] Node ~p start leader election. Term is ~p.~n", [self(), my_name(), CurrentTerm]),
   % Should consider deadlock.
   % So, we DO NOT USE syncronous function.
+  Data1 = schedule_heartbeat_timeout_and_replace_previous_one(Data0),
+  Data2 = clear_given_voted(Data1),
+  Data3 = vote_my_self(CurrentTerm + 1, Data2),
+
   #?MODULE{members=Members, current_term=CurTerm,
            given_voted=GivenVoted,
            last_applied=LastAppliedIndex,
-           last_log_term=LastLogTerm} = Data0,
+           last_log_term=LastLogTerm} = Data3,
 
-  case raft_leader_election:is_win(sets:size(Members), sets:size(GivenVoted)) of
-    true -> {next_state, leader, Data0};
+  case raft_leader_election:has_quorum(sets:size(Members), sets:size(GivenVoted)) of
+    true -> {next_state, leader, Data3};
     false ->
       ToMembers = get_members_except_me(Members),
       VoteArgs = raft_leader_election:new_vote_arguments(my_name(), CurTerm, LastAppliedIndex, LastLogTerm),
@@ -233,70 +256,95 @@ candidate(cast, start_leader_election, #?MODULE{current_term=CurrentTerm}=Data0)
                                      end
                                    end,
       lists:foreach(RequestVoteIfNodeIsExisted, sets:to_list(ToMembers)),
-      {keep_state, Data0}
+      {keep_state, Data3}
   end;
 
-candidate(cast, {ack_request_voted, FromName, CurrentTerm, true}, Data0) ->
-  io:format("[~p] the node ~p got ack_request_voted from ~p. Got grant true. ~n", [self(), my_name(), FromName]),
-  #?MODULE{given_voted=GivenVoted0, members=Members} = Data0,
-  GivenVoted1 = sets:add_element(FromName, GivenVoted0),
-  Data1 = Data0#?MODULE{given_voted=GivenVoted1},
-  GivenVotedSize = sets:size(GivenVoted1),
-  MemberSize = sets:size(Members),
+candidate(cast, {request_vote, #vote_args{candidate_term=CandidateTerm}=VoteArgs},
+          #?MODULE{current_term=CurrentTerm0}=Data0) when CurrentTerm0 < CandidateTerm->
 
-  case raft_leader_election:is_win(MemberSize, GivenVotedSize) of
+  Data1 = Data0#?MODULE{current_term=CandidateTerm, voted_for=undefined},
+  NextEvent = {cast, {request_vote, VoteArgs}},
+  {next_state, follower, Data1, {next_event, NextEvent}};
+
+candidate(cast, {request_vote, VoteArgs}, Data0) ->
+  #vote_args{candidate_name=CandidateName} = VoteArgs,
+  #?MODULE{voted_for=VotedFor,
+    current_term=CurrentTerm,
+    last_applied=FollowerLogLastIndex,
+    last_log_term=FollowerLogLastTerm} = Data0,
+
+  case raft_leader_election:can_vote(VotedFor, CurrentTerm, FollowerLogLastTerm, FollowerLogLastIndex, VoteArgs) of
     true ->
-      io:format("[~p] the node ~p win the leader election. term is ~p.~n", [self(), my_name(), CurrentTerm]),
-      Data2 = Data1#?MODULE{given_voted=sets:new()},
-      {next_state, leader, Data2};
-    false -> {keep_state, Data1}
+      Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
+      ack_request_voted(CandidateName, CurrentTerm, true),
+      {keep_state, Data1};
+    false ->
+      ack_request_voted(CandidateName, CurrentTerm, false)
   end;
 
-candidate(cast, {ack_request_voted, FromName, _CurrentTerm, false}, Data0) ->
-  io:format("[~p] the node ~p got ack_request_voted from ~p. Got grant false. ~n", [self(), my_name(), FromName]),
+
+candidate(cast, {ack_request_voted, _FromName, ResponseTerm, true},
+          #?MODULE{current_term=CurrentTerm}=Data0) when CurrentTerm < ResponseTerm->
+  step_down(ResponseTerm, Data0);
+
+candidate(cast, {ack_request_voted, FromName, ResponseTerm, true}, Data0) ->
+  #?MODULE{current_term=CurrentTerm}=Data0,
+  Data =
+    case ResponseTerm =:= CurrentTerm of
+      true ->
+        #?MODULE{given_voted=GivenVoted0} = Data0,
+        GivenVoted1 = sets:add_element(FromName, GivenVoted0),
+        Data0#?MODULE{given_voted=GivenVoted1};
+      false -> Data0
+    end,
+  {keep_state, Data, {next_event, cast, can_become_leader}};
+
+candidate(cast, {ack_request_voted, _FromName, _ResponseTerm, false}, Data0) ->
   {keep_state, Data0};
 
-%%candidate(cast, {ack_request_voted, FromName, CurrentTerm, VoteGranted}, Data0) ->
-%%  io:format("[~p] the node ~p got ack_request_voted from ~p.~n", [self(), my_name(), FromName]),
-%%  #?MODULE{given_voted=GivenVoted0, members=Members} = Data0,
-%%  GivenVoted1 = sets:add_element(FromName, GivenVoted0),
-%%  Data1 = Data0#?MODULE{given_voted=GivenVoted1},
-%%  GivenVotedSize = sets:size(GivenVoted1),
-%%  MemberSize = sets:size(Members),
-%%
-%%  case raft_leader_election:is_win(MemberSize, GivenVotedSize) of
-%%    true ->
-%%      io:format("[~p] the node ~p win the leader election. ~n", [self(), my_name()]),
-%%      {next_state, leader, Data1};
-%%    false -> {keep_state, Data1}
-%%  end;
+candidate(cast, can_become_leader, Data0) ->
+  #?MODULE{given_voted=GivenVoted, members=Members, current_term=CurrentTerm} = Data0,
+  GivenVotedSize = sets:size(GivenVoted),
+  MemberSize = sets:size(Members),
+
+  case raft_leader_election:has_quorum(MemberSize, GivenVotedSize) of
+    true ->
+      io:format("[~p] the node ~p win the leader election. term is ~p.~n", [self(), my_name(), CurrentTerm]),
+      Data2 = Data0#?MODULE{given_voted=sets:new(), voted_for=undefined},
+      {next_state, leader, Data2};
+    false -> {keep_state, Data0}
+  end;
 
 % In some situations an election will result in a split vote. In this case the term
 % will end with no leader; a new term (with a new election) will begin shortly.
 % Raft ensures that there is at most one leader in a given term.
-candidate(cast, election_timeout, Data0) ->
+
+% The third possible outcome is that a candidate neither wins nor loses the election: if many followers become
+% candidates at the same time, votes could be split so that no candidate obtains a majority. When this happens, each
+% candidate will time out and start a new election by incrementing its term and initiating another round of RequestVote RPCs.
+% However, without extra measures split votes could repeat indefinitely
+candidate(cast, election_timeout, Data) ->
   io:format("[~p] the node ~p got election_timeout as candidate. this node fail to win leader election. so it turns to follower. ~n", [self(), my_name()]),
-  Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
-  {next_state, follower, Data1};
+  {keep_state, Data, {next_event, cast, start_leader_election}};
 
 % While waiting for votes, a candidate may receive an AppendEntries RPC from another server claiming to be leader.
 % If the leader’s term (included in its RPC) is at least as large as the candidate’s current term,
 % then the candidate recognizes the leader as legitimate and returns to follower state.
 % If the term in the RPC is smaller than the candidate’s current term, then the candidate rejects the RPC and continues in candidate state.
-candidate({call, From}, {append_entries, Entries}, Data0) ->
-  #?MODULE{current_term=CurrentTerm} = Data0,
-  TermFromLeader = raft_append_entries_rpc:get(term, Entries),
-  case CurrentTerm =< TermFromLeader of
-    true ->
-      %% TODO : Implement Detail.
-      %% For example, add commited log its local state.
-      Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
-      {next_state, follower, Data1, [{reply, From, follower}]};
-    false ->
-      %% TODO : 응답을 보내줘야 할 수도 있음. 그래야 오래된 리더가 다시 Follower로 갈 수 있도록.
-      {keep_state, Data0}
-  end;
+candidate(cast, {append_entries, #append_entries{term=LeaderTerm}}, #?MODULE{current_term=CandidateTerm}=Data0)
+  when LeaderTerm < CandidateTerm ->
+  {keep_state, Data0};
+candidate(cast, {append_entries, AppendEntries}, Data0) ->
+  %% TODO : Implement Detail.
+  %% For example, add commited log its local state.
+  Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
+  NewTerm = raft_rpc_append_entries:get(term, AppendEntries),
 
+  Data2 = Data1#?MODULE{current_term=NewTerm},
+
+  %%% TODO : 받았다는 응답을 Leader에게 보내줘야 할 수도 있음.
+  %%% 그래야 Leader도 Commit을 할꺼니까.
+  {next_state, follower, Data2};
 % The third possible outcome is that a candidate neither wins nor loses the election: if many followers become candidates at the same time,
 % votes could be split so that no candidate obtains a majority. When this happens, each candidate will time out and start a new election by incrementing
 % its term and initiating another round of RequestVote RPCs. However, without extra measures split votes could repeat indefinitely.
@@ -338,6 +386,24 @@ candidate(EventType, EventContent, Data) ->
 leader(cast, start_append_entries, Data0) ->
   ok;
 
+leader(cast, {request_vote, #vote_args{candidate_term=CandidateTerm}=VoteArgs},
+    #?MODULE{current_term=CurrentTerm0}=Data0) when CurrentTerm0 < CandidateTerm->
+
+  Data1 = Data0#?MODULE{current_term=CandidateTerm, voted_for=undefined},
+  NextEvent = {cast, {request_vote, VoteArgs}},
+  {next_state, follower, Data1, {next_event, NextEvent}};
+
+leader(cast, {request_vote, VoteArgs}, Data0) ->
+  {keep_state, Data0};
+
+
+leader(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted},
+       #?MODULE{current_term=CurrentTerm}=Data0) ->
+  %%% TODO : Some Followers can voted after for candidate to become leader.
+  case CurrentTerm < ResponseTerm of
+    true -> step_down(ResponseTerm, Data0);
+    false -> {keep_state, Data0}
+  end;
 
 leader({call, From}, election_timeout, Data0) ->
   io:format("[~p] Node ~p got leader_election but it is already candidate. it is in somewhat inconsistency. It will be eventually resolved. ~n", [self(), self()]),
@@ -387,10 +453,16 @@ handle_event(EventType, EventCount, State, Data) ->
 clear_given_voted(Data0) ->
   Data0#?MODULE{given_voted=sets:new()}.
 
-vote(NodeName, Data0) ->
+vote_my_self(NewTerm, Data0) ->
   #?MODULE{given_voted=GivenVoted0} = Data0,
-  GivenVoted = sets:add_element(NodeName, GivenVoted0),
-  Data0#?MODULE{given_voted=GivenVoted, voted_for=NodeName}.
+  GivenVoted = sets:add_element(my_name(), GivenVoted0),
+  Data0#?MODULE{given_voted=GivenVoted, voted_for=my_name(), current_term=NewTerm}.
+
+
+vote(CandidateName, NewTerm, Data0) ->
+  #?MODULE{given_voted=GivenVoted0} = Data0,
+  GivenVoted = sets:add_element(CandidateName, GivenVoted0),
+  Data0#?MODULE{given_voted=GivenVoted, voted_for=CandidateName, current_term=NewTerm}.
 
 increase_current_term(Data0) ->
   #?MODULE{current_term=CurrentTerm} = Data0,
@@ -408,7 +480,7 @@ increase_current_term(Data0) ->
 ack_request_voted(CandidateName, CurrentTerm, VoteGranted) ->
   io:format("ack_request_voted CandidateName: ~p~n", [CandidateName]),
   ToPid = get_node_pid(CandidateName),
-  RequestVoteRpc = raft_request_vote_rpc:new_ack(CurrentTerm, VoteGranted, my_name()),
+  RequestVoteRpc = raft_rpc_request_vote:new_ack(CurrentTerm, VoteGranted, my_name()),
   gen_statem:cast(ToPid, RequestVoteRpc).
 
 %%% Schedule function.
@@ -462,4 +534,13 @@ node_name(Pid) ->
 
 get_node_pid(NodeName) ->
   whereis(NodeName).
+
+step_down(NewTerm, Data0) ->
+  Data1 = Data0#?MODULE{current_term=NewTerm,
+                        voted_for=undefined,
+                        given_voted=sets:new()},
+  {next_state, follower, Data1}.
+
+
+
 

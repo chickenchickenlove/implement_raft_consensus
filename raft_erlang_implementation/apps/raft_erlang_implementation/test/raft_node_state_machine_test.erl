@@ -55,7 +55,7 @@ follower_should_refresh_its_timer_when_valid_candidate_sends_a_request_vote_rpc_
   ValidTermId = 10,
 
   %%% WHEN
-  NewRequestVoted = raft_request_vote_rpc:new_request_vote('B', ValidTermId, 10, 10),
+  NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', ValidTermId, 10, 10),
   raft_node_state_machine:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
@@ -78,7 +78,7 @@ follower_should_ack_vote_when_valid_candidate_sends_a_request_vote_rpc_test() ->
 
   %%% WHEN
   ValidTermId = 10,
-  NewRequestVoted = raft_request_vote_rpc:new_request_vote('B', ValidTermId, 10, 10),
+  NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', ValidTermId, 10, 10),
   raft_node_state_machine:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
@@ -107,7 +107,7 @@ follower_should_update_its_state_when_valid_candidate_sends_a_request_vote_rpc_t
 
   %%% WHEN
   ValidTermId = 10,
-  NewRequestVoted = raft_request_vote_rpc:new_request_vote('B', ValidTermId, 10, 10),
+  NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', ValidTermId, 10, 10),
   raft_node_state_machine:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
@@ -136,7 +136,7 @@ follower_should_not_refresh_its_timer_when_invalid_candidate_sends_a_requested_r
 
   %%% WHEN
   InvalidTermId = -1,
-  NewRequestVoted = raft_request_vote_rpc:new_request_vote('B', InvalidTermId, 10, 10),
+  NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', InvalidTermId, 10, 10),
   raft_node_state_machine:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
@@ -162,7 +162,7 @@ follower_should_not_voted_when_invalid_candidate_sends_a_request_vote_rpc_test()
 
   %%% WHEN
   InvalidTermId = -1,
-  NewRequestVoted = raft_request_vote_rpc:new_request_vote('B', InvalidTermId, 20, 30),
+  NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', InvalidTermId, 20, 30),
   raft_node_state_machine:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
@@ -194,7 +194,7 @@ follower_should_not_update_its_state_when_invalid_candidate_sends_a_request_vote
 
   %%% WHEN
   InvalidTermId = -1,
-  NewRequestVoted = raft_request_vote_rpc:new_request_vote('B', InvalidTermId, 20, 30),
+  NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', InvalidTermId, 20, 30),
   raft_node_state_machine:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
@@ -243,7 +243,7 @@ candidate_should_ignore_append_entries_with_older_term_test() ->
 
   %%% WHEN
   timer:sleep(650),
-  OlderAppendEntries = raft_append_entries_rpc:new_append_entries_rpc(0, 'B', 0, 0, [], 0),
+  OlderAppendEntries = raft_rpc_append_entries:new_append_entries_rpc(0, 'B', 0, 0, [], 0),
   gen_statem:cast(whereis('A'), {append_entries, OlderAppendEntries}),
 
   %%% THEN
