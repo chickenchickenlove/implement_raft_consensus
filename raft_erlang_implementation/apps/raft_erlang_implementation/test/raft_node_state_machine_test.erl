@@ -30,7 +30,7 @@ follow_turns_to_candidate_when_election_timeout_occur_test() ->
   {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
 
   %%% WHEN : Trigger election timeout.
-  timer:sleep(650),
+  timer:sleep(1000),
 
   %%% THEN
   State = raft_node_state_machine:get_state(Pid),
@@ -219,7 +219,7 @@ candidate_turns_to_leader_immediately_if_alone_in_cluster_test() ->
   {ok, Pid} = raft_node_state_machine:start('A', ['A']),
 
   %%% WHEN
-  timer:sleep(800),
+  timer:sleep(1000),
 
   %%% THEN
   State = raft_node_state_machine:get_state(Pid),
@@ -242,8 +242,8 @@ candidate_should_ignore_append_entries_with_older_term_test() ->
   {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
 
   %%% WHEN
-  timer:sleep(650),
-  OlderAppendEntries = raft_rpc_append_entries:new_append_entries_rpc(0, 'B', 0, 0, [], 0),
+  timer:sleep(1000),
+  OlderAppendEntries = raft_rpc_append_entries:new(0, 'B', 0, 0, [], 0),
   gen_statem:cast(whereis('A'), {append_entries, OlderAppendEntries}),
 
   %%% THEN
@@ -255,8 +255,9 @@ candidate_should_ignore_append_entries_with_older_term_test() ->
 
 
 
+%%raft_util:set_timer_time(1000),
 %%raft_node_state_machine:start('A', ['A', 'B', 'C']),
-%%raft_node_state_machine:start('B', ['A', 'B', 'C'])
+%%raft_node_state_machine:start('B', ['A', 'B', 'C']).
 
 
 flush_msg_() ->

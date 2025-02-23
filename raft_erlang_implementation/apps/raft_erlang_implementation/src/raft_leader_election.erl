@@ -24,7 +24,10 @@
   {candidate_term(), candidate_id(), last_log_index(), last_log_term()}.
 
 new_vote_arguments(NodeName, NodeTerm, LastLogIndex, LastLogTerm) ->
-  {NodeTerm, NodeName, LastLogIndex, LastLogTerm}.
+  #vote_args{candidate_name=NodeName,
+             candidate_term=NodeTerm,
+             candidate_last_log_index=LastLogIndex,
+             candidate_last_log_term=LastLogTerm}.
 
 start_election(Members, VoteArgs) ->
   FilteredMembers = sets:filter(
@@ -40,8 +43,7 @@ start_election(Members, VoteArgs) ->
     end, sets:to_list(FilteredMembers)).
 
 has_quorum(TotalMemberSize, VotedMemberCount) ->
-  VotedMemberCount * 2 > TotalMemberSize.
-%%  VotedMemberCount >= ((TotalMemberSize div 2) + (TotalMemberSize rem 2)).
+  VotedMemberCount >= (TotalMemberSize div 2) + 1.
 
 %% 리더 기반 합의 알고리즘에서는 리더가 모든 커밋된 로그를 포함해야 한다.
 % Raft는 리더가 선출될 때부터 모든 커밋된 로그를 보장하도록 설계됨.

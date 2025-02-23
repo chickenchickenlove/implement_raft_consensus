@@ -4,9 +4,9 @@
 
 %% API
 -export([get/2]).
--export([new_append_entries_rpc/6]).
+-export([new/6]).
 
-new_append_entries_rpc(Term, LeaderName, PrevLogIndex, PrevLogTerm, Entries, LeaderCommit) ->
+new(Term, LeaderName, PrevLogIndex, PrevLogTerm, Entries, LeaderCommit) ->
   #append_entries{term=Term,
                   leader_name = LeaderName,
                   previous_log_index = PrevLogIndex,
