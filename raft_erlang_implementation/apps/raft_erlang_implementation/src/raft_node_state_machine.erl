@@ -193,27 +193,56 @@ stop(NodeName) ->
 %%%   2) Request Voted RPC from valid candidate.
 %%%   3) InstallSnapshot RPC from valid leader.
 
-follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
+follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm}=AppendEntriesRpc},
          #?MODULE{current_term=CurrenTerm}=Data0) when CurrenTerm < AppendEntriesTerm ->
   io:format("[~p] Node ~p got append_entries1. ~n", [self(), my_name()]),
   Data1 = step_down(AppendEntriesTerm, Data0),
-  Data2 = Data1#?MODULE{leader=LeaderName},
-  {keep_state, Data2, {next_event, cast, {append_entries, AppendEntriesRpc}}};
+  {keep_state, Data1, {next_event, cast, {append_entries, AppendEntriesRpc}}};
 
 follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
          #?MODULE{current_term=CurrenTerm}=Data0) when CurrenTerm > AppendEntriesTerm ->
   io:format("[~p] Node ~p got append_entries2. ~n", [self(), my_name()]),
-  AckAppendEntriesMsg = {my_name(), CurrenTerm, false},
+  AckAppendEntriesMsg = {my_name(), CurrenTerm, false, -1},
   ToPid = get_node_pid(LeaderName),
   gen_statem:cast(ToPid, AckAppendEntriesMsg),
   {keep_state, Data0};
 
-follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
-         #?MODULE{current_term=CurrenTerm}=Data0)  ->
-  io:format("[~p] Node ~p got append_entries3 from ~p. ~n", [self(), my_name(), LeaderName]),
+follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
+%%  io:format("[~p] Node ~p got append_entries3 from ~p. ~n", [self(), my_name(), LeaderName]),
   Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
-  % TODO : Implement Detail
-  {keep_state, Data1};
+
+  #?MODULE{log_entries=Logs, current_term=CurrentTerm, commit_index=CommitIndex0} = Data1,
+  #append_entries{leader_name=LeaderName,
+                  entries=LogsFromLeader,
+                  leader_commit_index=LeaderCommitIndex,
+                  previous_log_index=PrevLogIndex,
+                  previous_log_term=PrevLogTerm} = AppendEntriesRpc,
+
+  NewLeader = LeaderName,
+  ReverseLogs = lists:reverse(Logs),
+  {MyPrevLogTerm, _Entry}= lists:nth(PrevLogIndex, ReverseLogs),
+
+  IsSuccess = (PrevLogIndex =:= 0 orelse
+    (PrevLogIndex =< length(Logs) andalso
+      PrevLogTerm =:=  MyPrevLogTerm)),
+
+  {UpdatedLogEntries, CommitIndex, MatchIndex}
+    = case IsSuccess of
+            true ->
+              {UpdatedLogEntries0, Index} = concat_log_entries(Logs, LogsFromLeader, PrevLogIndex),
+              CommitIndex1 = min(LeaderCommitIndex, CommitIndex0),
+              {UpdatedLogEntries0, CommitIndex1, Index};
+            false ->
+              {Logs, CommitIndex0, 0}
+          end,
+
+  ToPid = get_node_pid(LeaderName),
+  AckAppendEntriesMsg = {my_name(), CurrentTerm, true, MatchIndex},
+  gen_statem:cast(ToPid, AckAppendEntriesMsg),
+
+  Data2 = Data1#?MODULE{leader=NewLeader, commit_index=CommitIndex,
+                        log_entries=UpdatedLogEntries},
+  {keep_state, Data2};
 
 
 follower(cast, election_timeout, Data) ->
@@ -375,8 +404,16 @@ candidate(cast, election_timeout, Data) ->
 % If the leader’s term (included in its RPC) is at least as large as the candidate’s current term,
 % then the candidate recognizes the leader as legitimate and returns to follower state.
 % If the term in the RPC is smaller than the candidate’s current term, then the candidate rejects the RPC and continues in candidate state.
-candidate(cast, {append_entries, #append_entries{term=LeaderTerm}}, #?MODULE{current_term=CandidateTerm}=Data0)
-  when LeaderTerm < CandidateTerm ->
+candidate(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
+         #?MODULE{current_term=CurrenTerm}=Data0) when CurrenTerm < AppendEntriesTerm ->
+  Data1 = step_down(AppendEntriesTerm, Data0),
+  {next_state, follower, Data1, {next_event, cast, {append_entries, AppendEntriesRpc}}};
+candidate(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
+          #?MODULE{current_term=CurrenTerm}=Data0) when CurrenTerm > AppendEntriesTerm ->
+  io:format("[~p] Node ~p got append_entries. ~n", [self(), my_name()]),
+  AckAppendEntriesMsg = {my_name(), CurrenTerm, false},
+  ToPid = get_node_pid(LeaderName),
+  gen_statem:cast(ToPid, AckAppendEntriesMsg),
   {keep_state, Data0};
 candidate(cast, {append_entries, AppendEntries}, Data0) ->
   %% TODO : Implement Detail.
@@ -423,6 +460,19 @@ leader(cast, do_append_entries, Data0) ->
   MembersExceptMe = sets:to_list(sets:del_element(my_name(), Members)),
   Data2 = do_append_entries(MembersExceptMe, Data1),
   {keep_state, Data2};
+
+leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm}=AppendEntriesRpc},
+       #?MODULE{current_term=CurrenTerm}=Data0) when CurrenTerm < AppendEntriesTerm ->
+  Data1 = step_down(AppendEntriesTerm, Data0),
+  {next_state, follower, Data1, {next_event, cast, {append_entries, AppendEntriesRpc}}};
+
+leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
+       #?MODULE{current_term=CurrenTerm}=Data0) when CurrenTerm > AppendEntriesTerm ->
+  io:format("[~p] Node ~p got append_entries. ~n", [self(), my_name()]),
+  AckAppendEntriesMsg = {my_name(), CurrenTerm, false},
+  ToPid = get_node_pid(LeaderName),
+  gen_statem:cast(ToPid, AckAppendEntriesMsg),
+  {keep_state, Data0};
 
 leader(cast, election_timeout, Data) ->
   {keep_state, Data};
@@ -681,4 +731,26 @@ get_log_nth(Logs, N, Acc) when N =:= 0 ->
 get_log_nth([H|T], N, Acc0) ->
   get_log_nth(T, N-1, [H|Acc0]).
 
+concat_log_entries(Logs, LogsFromLeader, PrevIndex) ->
+  ReversedLogs = lists:reverse(Logs),
+  ReversedLogsFromLeaders = lists:reverse(LogsFromLeader),
+  InitIndex = PrevIndex,
+  {ReversedConcatLogs, Index} = concat_log_entries(ReversedLogs, ReversedLogsFromLeaders, InitIndex, false),
+  {lists:reverse(ReversedConcatLogs), Index}.
 
+concat_log_entries(Logs, LogsFromLeader, Index, _IsDifferent)
+  when length(LogsFromLeader) =< Index ->
+  {Logs, Index};
+concat_log_entries(Logs, LogsFromLeader, Index, true)
+  when length(LogsFromLeader) =< Index ->
+  % 틀린 부분을 찾으면, 그 앞부분까지만 남기고 다 날린다.
+  % 그리고 Leader로부터 받은 로그를 추가한다.
+  % 불일치가 발견되면 truncate 후 append
+  {lists:sublist(Logs, 1, Index-1) ++ LogsFromLeader, Index};
+concat_log_entries(Logs0, [Head|Rest], Index, false) ->
+  NextIndex = Index + 1,
+  {LogTerm, _Entry} = lists:nth(NextIndex, Logs0),
+  {LogTermFromLeader, _Entry} = Head,
+
+  IsDifferent = LogTerm =/= LogTermFromLeader,
+  concat_log_entries(Logs0, Rest, NextIndex, IsDifferent).
