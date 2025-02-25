@@ -5,6 +5,8 @@
 %% API
 -export([get/2]).
 -export([new/6]).
+-export([new_ack/4]).
+-export([new_ack_fail/2]).
 
 new(Term, LeaderName, PrevLogIndex, PrevLogTerm, Entries, LeaderCommit) ->
   #append_entries{term=Term,
@@ -13,6 +15,19 @@ new(Term, LeaderName, PrevLogIndex, PrevLogTerm, Entries, LeaderCommit) ->
                   previous_log_term = PrevLogTerm,
                   entries = Entries,
                   leader_commit_index = LeaderCommit}.
+
+new_ack_fail(NodeName, NodeTerm) ->
+  % -1 is invalid value.
+  % So, Caller should ignore this value if caller witness this.
+  new_ack(NodeName, NodeTerm, false, -1).
+
+
+new_ack(NodeName, NodeTerm, Success, MatchIndex) ->
+  #ack_append_entries{node_name=NodeName,
+                      node_term=NodeTerm,
+                      success=Success,
+                      match_index=MatchIndex}.
+
 
 get(term, #append_entries{term=Term}) ->
   Term;

@@ -16,6 +16,7 @@
 -export([held_leader_election/2]).
 -export([request_vote/2]).
 -export([callback_mode/0]).
+-export([add_entry/2]).
 
 
 %% For Test API
@@ -24,6 +25,7 @@
 -export([get_current_term/1]).
 -export([get_timer/1]).
 -export([get_voted_for/1]).
+-export([get_log_entries/1]).
 
 %% State Function
 -export([follower/3]).
@@ -105,6 +107,12 @@ start(NodeName, Members) ->
   MemberSet = sets:from_list(Members),
   gen_statem:start(?MODULE, {NodeName, MemberSet}, []).
 
+add_entry(NodeName, Entry) when is_atom(NodeName) ->
+  Pid = whereis(NodeName),
+  gen_statem:call(Pid, {new_entry, Entry});
+add_entry(Pid, Entry) ->
+  gen_statem:call(Pid, {new_entry, Entry}).
+
 request_vote(NodeName, VoteArgs) when is_atom(NodeName) ->
   Pid = whereis(NodeName),
   % Should be cast. otherwise, deadlock occur.
@@ -140,6 +148,9 @@ get_voted_count(Pid) ->
 
 get_current_term(Pid) ->
   gen_statem:call(Pid, get_current_term).
+
+get_log_entries(Pid) ->
+  gen_statem:call(Pid, get_log_entries).
 
 -define(ELECTION_TIMEOUT, 10000).
 
@@ -208,7 +219,7 @@ follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_n
   {keep_state, Data0};
 
 follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
-%%  io:format("[~p] Node ~p got append_entries3 from ~p. ~n", [self(), my_name(), LeaderName]),
+
   Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
 
   #?MODULE{log_entries=Logs, current_term=CurrentTerm, commit_index=CommitIndex0} = Data1,
@@ -218,32 +229,47 @@ follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
                   previous_log_index=PrevLogIndex,
                   previous_log_term=PrevLogTerm} = AppendEntriesRpc,
 
+  io:format("[~p] Node ~p got append_entries3 from ~p. ~n", [self(), my_name(), LeaderName]),
   NewLeader = LeaderName,
   ReverseLogs = lists:reverse(Logs),
-  {MyPrevLogTerm, _Entry}= lists:nth(PrevLogIndex, ReverseLogs),
+  MyPrevLogTerm = get_log_term(PrevLogIndex, ReverseLogs),
 
   IsSuccess = (PrevLogIndex =:= 0 orelse
-    (PrevLogIndex =< length(Logs) andalso
-      PrevLogTerm =:=  MyPrevLogTerm)),
+               (PrevLogIndex =< length(Logs) andalso PrevLogTerm =:=  MyPrevLogTerm)
+              ),
+
+  io:format("[~p] isSuccess ~p ~n", [self(), IsSuccess]),
 
   {UpdatedLogEntries, CommitIndex, MatchIndex}
     = case IsSuccess of
             true ->
               {UpdatedLogEntries0, Index} = concat_log_entries(Logs, LogsFromLeader, PrevLogIndex),
+              io:format("[~p] Node ~p.
+              UpdatedLogEntries0: ~p,
+              Index: ~p~n", [self(), my_name(), UpdatedLogEntries0, Index]),
               CommitIndex1 = min(LeaderCommitIndex, CommitIndex0),
               {UpdatedLogEntries0, CommitIndex1, Index};
             false ->
               {Logs, CommitIndex0, 0}
           end,
 
+  io:format("[~p]
+   LogsFromLeader: ~p
+   UpdatedLogEntries: ~p,
+   CommitIndex: ~p,
+   MatchIndex: ~p~n", [self(), LogsFromLeader, UpdatedLogEntries, CommitIndex, MatchIndex]),
   ToPid = get_node_pid(LeaderName),
-  AckAppendEntriesMsg = {my_name(), CurrentTerm, true, MatchIndex},
-  gen_statem:cast(ToPid, AckAppendEntriesMsg),
+  AckAppendEntries = raft_rpc_append_entries:new_ack(my_name(), CurrentTerm, true, MatchIndex),
+  Msg = {ack_append_entries, AckAppendEntries},
+  gen_statem:cast(ToPid, Msg),
 
   Data2 = Data1#?MODULE{leader=NewLeader, commit_index=CommitIndex,
                         log_entries=UpdatedLogEntries},
   {keep_state, Data2};
 
+follower(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
+    #?MODULE{current_term=CurrentTerm}=Data0) when CurrentTerm < NodeTerm ->
+  step_down(NodeTerm, Data0);
 
 follower(cast, election_timeout, Data) ->
   io:format("[~p] Node ~p got election_timeout. from now on, it is candidate follower. leader election will be held in a few second. ~n", [self(), my_name()]),
@@ -411,9 +437,11 @@ candidate(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_
 candidate(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
           #?MODULE{current_term=CurrenTerm}=Data0) when CurrenTerm > AppendEntriesTerm ->
   io:format("[~p] Node ~p got append_entries. ~n", [self(), my_name()]),
-  AckAppendEntriesMsg = {my_name(), CurrenTerm, false},
+
+  AckAppendEntries = raft_rpc_append_entries:new_ack_fail(my_name(), CurrenTerm),
+  Msg = {ack_append_entries, AckAppendEntries},
   ToPid = get_node_pid(LeaderName),
-  gen_statem:cast(ToPid, AckAppendEntriesMsg),
+  gen_statem:cast(ToPid, Msg),
   {keep_state, Data0};
 candidate(cast, {append_entries, AppendEntries}, Data0) ->
   %% TODO : Implement Detail.
@@ -426,6 +454,11 @@ candidate(cast, {append_entries, AppendEntries}, Data0) ->
   %%% TODO : 받았다는 응답을 Leader에게 보내줘야 할 수도 있음.
   %%% 그래야 Leader도 Commit을 할꺼니까.
   {next_state, follower, Data2};
+
+candidate(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
+          #?MODULE{current_term=CurrentTerm}=Data0) when CurrentTerm < NodeTerm ->
+  step_down(NodeTerm, Data0);
+
 % The third possible outcome is that a candidate neither wins nor loses the election: if many followers become candidates at the same time,
 % votes could be split so that no candidate obtains a majority. When this happens, each candidate will time out and start a new election by incrementing
 % its term and initiating another round of RequestVote RPCs. However, without extra measures split votes could repeat indefinitely.
@@ -454,6 +487,7 @@ candidate(EventType, EventContent, Data) ->
 %%  success: true if follower contained entry matching prevLogIndex and prevLogTerm
 leader(cast, do_append_entries, Data0) ->
   io:format("[~p] Node ~p got do_append_entires ~n", [self(), my_name()]),
+  io:format("[~p] Node ~p got do_append_entires HERE~n", [self(), my_name()]),
 
   Data1 = schedule_append_entries(Data0),
   #?MODULE{members=Members} = Data1,
@@ -469,9 +503,40 @@ leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm}=AppendEntr
 leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
        #?MODULE{current_term=CurrenTerm}=Data0) when CurrenTerm > AppendEntriesTerm ->
   io:format("[~p] Node ~p got append_entries. ~n", [self(), my_name()]),
-  AckAppendEntriesMsg = {my_name(), CurrenTerm, false},
+
   ToPid = get_node_pid(LeaderName),
-  gen_statem:cast(ToPid, AckAppendEntriesMsg),
+  AckAppendEntries = raft_rpc_append_entries:new_ack_fail(my_name(), CurrenTerm),
+  Msg = {ack_append_entries, AckAppendEntries},
+  gen_statem:cast(ToPid, Msg),
+  {keep_state, Data0};
+
+leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
+       #?MODULE{current_term=CurrentTerm}=Data0) when CurrentTerm < NodeTerm ->
+  step_down(NodeTerm, Data0);
+
+leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckAppendEntries},
+       #?MODULE{current_term=CurrentTerm}=Data0) when CurrentTerm =:= NodeTerm ->
+  io:format("[~p] Node ~p got ack_append_entries. ~n", [self(), my_name()]),
+  #ack_append_entries{success=Success, match_index=NodeMatchIndex, node_name=NodeName} = AckAppendEntries,
+  #?MODULE{match_index=MatchIndex0, next_index=NextIndex0} = Data0,
+
+  {MatchIndex, NextIndex} =
+    case Success of
+      true ->
+        MatchIndex1 = maps:put(NodeName, NodeMatchIndex, MatchIndex0),
+        NextIndex1 = maps:put(NodeName, NodeMatchIndex + 1, NextIndex0),
+        {MatchIndex1, NextIndex1};
+      false ->
+        NewNextIndex = max(1, maps:get(NodeName, NextIndex0) - 1),
+        NextIndex2 = maps:put(NodeName, NewNextIndex, NextIndex0),
+        {MatchIndex0, NextIndex2}
+    end,
+
+  Data1 = Data0#?MODULE{next_index=NextIndex, match_index=MatchIndex},
+  {keep_state, Data1};
+
+leader(cast, {ack_append_entries, _}, Data0) ->
+  % Ignore
   {keep_state, Data0};
 
 leader(cast, election_timeout, Data) ->
@@ -495,6 +560,15 @@ leader(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted}, Data0) ->
     false -> {keep_state, Data0}
   end;
 
+leader({call, From}, {new_entry, Entry}, Data0) ->
+  io:format("[~p] Node ~p got new_entry ~p~n", [self(), my_name(), Entry]),
+  #?MODULE{log_entries=Entries0, current_term=CurrentTerm} = Data0,
+  Entries = [{CurrentTerm, Entry}| Entries0],
+  Data1 = Data0#?MODULE{log_entries=Entries},
+  io:format("Entries: ~p
+  Data1: ~p~n", [Entries, Data1]),
+  {keep_state, Data1, [{reply, From, success}]};
+
 leader(EventType, EventContent, Data) ->
   handle_event(EventType, EventContent, leader, Data).
 
@@ -504,6 +578,9 @@ handle_event({call, From}, get_timer, State, Data) ->
   {keep_state, Data, [{reply, From, Timer}]};
 handle_event({call, From}, get_state, State, Data) ->
   {keep_state, Data, [{reply, From, State}]};
+handle_event({call, From}, get_log_entries, State, Data) ->
+  #?MODULE{log_entries=LogEntries} = Data,
+  {keep_state, Data, [{reply, From, LogEntries}]};
 
 handle_event({call, From}, get_voted_count, _State, Data) ->
   #?MODULE{vote_granted=VoteGranted} = Data,
@@ -686,7 +763,7 @@ log_term([Head|_Tail], _Index) ->
 do_append_entries([], Data) ->
   Data;
 do_append_entries([Member|Rest], Data0) ->
-  #?MODULE{match_index=MatchIndex, rpc_due=RpcDue0, log_entries=Log, next_index=NextIndex0,
+  #?MODULE{match_index=MatchIndex, rpc_due=RpcDue0, log_entries=Log, next_index=NextIndex,
           current_term=CurrentTerm, commit_index=CommitIndex} = Data0,
   MatchIndexOfMember = maps:get(Member, MatchIndex),
   HasLagOfLog = MatchIndexOfMember < length(Log),
@@ -700,12 +777,19 @@ do_append_entries([Member|Rest], Data0) ->
       NextRpcExpiredTime = next_rpc_due_divide_by(2),
       RpcDue = maps:put(Member, NextRpcExpiredTime, RpcDue0),
 
-      PrevIndex = maps:get(Member, NextIndex0) - 1,
+      io:format("NextIndex0 :~p~n", [NextIndex]),
+      PrevIndex = maps:get(Member, NextIndex) - 1,
+      LastIndex = length(Log) + 1,
 
-      LastIndex = length(Log),
-      NextIndex = maps:put(Member, LastIndex, NextIndex0),
+      ToBeSentEntries = case Log of
+        [] -> [];
+        Log ->
+          ReversedLogs = lists:reverse(Log),
+          lists:sublist(ReversedLogs, PrevIndex+1, length(Log))
+      end,
 
-      ToBeSentEntries = get_log_nth(Log, LastIndex - PrevIndex, []),
+
+%%      ToBeSentEntries = get_log_nth(Log, LastIndex - PrevIndex, []),
 
       PrevTerm = case ToBeSentEntries of
                    [] -> 0 ;
@@ -716,6 +800,16 @@ do_append_entries([Member|Rest], Data0) ->
 
       AppendEntriesRpc = raft_rpc_append_entries:new(CurrentTerm, my_name(), PrevIndex, PrevTerm, ToBeSentEntries, CommitIndex),
       AppendEntriesRpcMsg = {append_entries, AppendEntriesRpc},
+
+      io:format("[~p] do_append_entries
+      Member: ~p,
+      NextIndex: ~p,
+      Log: ~p,
+      CurrentTerm: ~p,
+      PrevIndex: ~p,
+      PrevTerm: ~p,
+      ToBeSentEntries: ~p,
+      CommitIndex: ~p~n", [self(), Member, NextIndex, Log, CurrentTerm, PrevIndex, PrevTerm, ToBeSentEntries, CommitIndex]),
       ToMemberPid = get_node_pid(Member),
       gen_statem:cast(ToMemberPid, AppendEntriesRpcMsg),
       Data1 = Data0#?MODULE{rpc_due=RpcDue, next_index=NextIndex},
@@ -735,22 +829,75 @@ concat_log_entries(Logs, LogsFromLeader, PrevIndex) ->
   ReversedLogs = lists:reverse(Logs),
   ReversedLogsFromLeaders = lists:reverse(LogsFromLeader),
   InitIndex = PrevIndex,
+  io:format("[~p] Node ~p. before concat_log_entries
+  ReversedLogs: ~p,
+  ReversedLogsFromLeaders: ~p,
+  InitIndex: ~p~n", [self(), my_name(), ReversedLogs, ReversedLogsFromLeaders, InitIndex]),
   {ReversedConcatLogs, Index} = concat_log_entries(ReversedLogs, ReversedLogsFromLeaders, InitIndex, false),
   {lists:reverse(ReversedConcatLogs), Index}.
 
 concat_log_entries(Logs, LogsFromLeader, Index, _IsDifferent)
-  when length(LogsFromLeader) =< Index ->
+  when length(LogsFromLeader) < Index ->
+  io:format("HERE1~n",[]),
   {Logs, Index};
+
+concat_log_entries([], LogsFromLeader, Index, true) ->
+  % 틀린 부분을 찾으면, 그 앞부분까지만 남기고 다 날린다.
+  % 그리고 Leader로부터 받은 로그를 추가한다.
+  % 불일치가 발견되면 truncate 후 append
+  io:format("HERE2
+  LogsFromLeader: ~p
+  Index: ~p~n",[LogsFromLeader, Index]),
+  {LogsFromLeader, Index};
+
 concat_log_entries(Logs, LogsFromLeader, Index, true)
   when length(LogsFromLeader) =< Index ->
   % 틀린 부분을 찾으면, 그 앞부분까지만 남기고 다 날린다.
   % 그리고 Leader로부터 받은 로그를 추가한다.
   % 불일치가 발견되면 truncate 후 append
+  io:format("HERE2.1~n",[]),
   {lists:sublist(Logs, 1, Index-1) ++ LogsFromLeader, Index};
+
+concat_log_entries([]=Logs0, LogsFromLeader, Index, false) when Index =:= 0 ->
+  % Leader는 내가 0번까지만 보낸 거라고 생각한다.
+  % 따라서 내가 가지고 있는 Logs Entry는 0이 맞다. -> 코너 케이스이므로, 그냥 여기서 마무리하면 된다.
+  % 혹은 더 가지고 있을 수도 있음.
+  io:format("HERE2.5
+  Logs: ~p,
+  LogsFromLeader: ~p,
+  Index: ~p~n", [Logs0, LogsFromLeader, Index]),
+  concat_log_entries(Logs0, LogsFromLeader, length(LogsFromLeader), true);
+
+concat_log_entries(Logs0, LogsFromLeader, Index, false) when Index =:= 0 ->
+  % Leader는 내가 0번까지만 보낸 거라고 생각한다.
+  % 따라서 내가 가지고 있는 Logs Entry는 0이 맞다. -> 코너 케이스이므로, 그냥 여기서 마무리하면 된다.
+  % 혹은 더 가지고 있을 수도 있음.
+  io:format("HERE2.6~n", []),
+  concat_log_entries(Logs0, LogsFromLeader, Index+1, true);
+
 concat_log_entries(Logs0, [Head|Rest], Index, false) ->
-  NextIndex = Index + 1,
-  {LogTerm, _Entry} = lists:nth(NextIndex, Logs0),
+  io:format("HERE3.1
+  Index: ~p,
+  Logs: ~p~n",[Index, Logs0]),
+  {LogTerm, _Entry} = lists:nth(Index, Logs0),
+  io:format("HERE3.2~n",[]),
   {LogTermFromLeader, _Entry} = Head,
 
+  io:format("HERE3.3~n",[]),
   IsDifferent = LogTerm =/= LogTermFromLeader,
-  concat_log_entries(Logs0, Rest, NextIndex, IsDifferent).
+  io:format("HERE3.4~n",[]),
+  concat_log_entries(Logs0, Rest, Index+1, IsDifferent).
+
+get_log_term(0, _) ->
+  -1;
+get_log_term(Index, ReverseLogs) ->
+  io:format("get_log_term
+  Index: ~p,
+  ReversedLogs: ~p~n", [Index, ReverseLogs]),
+  case ReverseLogs of
+
+    [] -> -1;
+    ReverseLogs ->
+      {MyPrevLogTerm, _Entry} = lists:nth(Index, ReverseLogs),
+      MyPrevLogTerm
+  end.

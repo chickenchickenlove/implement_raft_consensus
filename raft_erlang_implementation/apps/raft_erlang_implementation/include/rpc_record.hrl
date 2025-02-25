@@ -19,3 +19,8 @@
                     candidate_name :: atom(),
                     candidate_last_log_index :: integer(),
                     candidate_last_log_term :: integer()}).
+
+-record(ack_append_entries, {node_name :: atom(),
+  node_term :: integer(),
+  success :: integer(),
+  match_index :: integer()}).
