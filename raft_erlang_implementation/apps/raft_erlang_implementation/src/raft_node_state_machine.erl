@@ -39,6 +39,7 @@
 
 % unit : millisecond.
 -define(RPC_TIMEOUT, 50).
+-define(INVALID_MATCH_INDEX, -1).
 
 %%%%%%%%%%%%%%%%%% NOTE %%%%%%%%%%%%%%%%%%%%%
 % Follower remains in follower state as long as it receives valid RPCs from a leader or candidate.
@@ -232,25 +233,30 @@ follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
   io:format("[~p] Node ~p got append_entries3 from ~p. ~n", [self(), my_name(), LeaderName]),
   NewLeader = LeaderName,
   ReverseLogs = lists:reverse(Logs),
-  MyPrevLogTerm = get_log_term(PrevLogIndex, ReverseLogs),
 
-  IsSuccess = (PrevLogIndex =:= 0 orelse
-               (PrevLogIndex =< length(Logs) andalso PrevLogTerm =:=  MyPrevLogTerm)
-              ),
+  io:format("[~p] Node ~p got append_entries3 from ~p
+  PrevLogIndex : ~p,
+  ReverseLogs: ~p~n", [self(), my_name(), LeaderName, PrevLogIndex, ReverseLogs]),
+
+  IsSuccess = raft_rpc_append_entries:should_append_entries(PrevLogIndex, PrevLogTerm, Logs),
+
+%%  IsSuccess = (PrevLogIndex =:= 0 orelse
+%%               (PrevLogIndex =< length(Logs) andalso PrevLogTerm =:=  MyPrevLogTerm)
+%%              ),
 
   io:format("[~p] isSuccess ~p ~n", [self(), IsSuccess]),
 
   {UpdatedLogEntries, CommitIndex, MatchIndex}
     = case IsSuccess of
             true ->
-              {UpdatedLogEntries0, Index} = concat_log_entries(Logs, LogsFromLeader, PrevLogIndex),
-              io:format("[~p] Node ~p.
-              UpdatedLogEntries0: ~p,
-              Index: ~p~n", [self(), my_name(), UpdatedLogEntries0, Index]),
-              CommitIndex1 = min(LeaderCommitIndex, CommitIndex0),
-              {UpdatedLogEntries0, CommitIndex1, Index};
+              %% Since the leader has declared that the index up to leaderCommit is “already safely replicated”, we can assume that the follower can commit up to that index.
+              %%  However, it is possible that the follower has not physically received logs up to that index yet, meaning that the actual length of the follower's logs (MatchIndex0) may be less than leaderCommit.
+              %%  Therefore, the follower can't commit to an index it doesn't actually have, so it must eventually commit up to the value of min(leaderCommit, the actual last index).
+              {UpdatedLogEntries0, MatchIndex0} = raft_rpc_append_entries:do_concat_entries(Logs, LogsFromLeader, PrevLogIndex),
+              CommitIndex1 = min(LeaderCommitIndex, MatchIndex0),
+              {UpdatedLogEntries0, CommitIndex1, MatchIndex0};
             false ->
-              {Logs, CommitIndex0, 0}
+              {Logs, CommitIndex0, ?INVALID_MATCH_INDEX}
           end,
 
   io:format("[~p]
@@ -778,18 +784,24 @@ do_append_entries([Member|Rest], Data0) ->
       RpcDue = maps:put(Member, NextRpcExpiredTime, RpcDue0),
 
       io:format("NextIndex0 :~p~n", [NextIndex]),
+      %%% NextIndex는 다음에 보낼 것을 의미한다.
+      %%% 1. 따라서 나는 NextIndex 전부터 -> 마지막 로그까지를 다 보내면 된다.
+      %%% 2. 내가 보내는 로그는 PrevIndex를 포함해야한다. 그리고 Follower에서 PrevIndex가 맞는 곳을 찾아야 한다.
+      %%% 3. 아마 대부분 PrevIndex는 맞을 것이다.
+      %%% 3. 맞지 않는 부분부터 내가 보낸 로그를 붙여넣으면 된다.
       PrevIndex = maps:get(Member, NextIndex) - 1,
-      LastIndex = length(Log) + 1,
 
-      ToBeSentEntries = case Log of
-        [] -> [];
-        Log ->
+      ToBeSentEntries = case {Log, PrevIndex} of
+        {[], _} -> [];
+        {Log, 0} -> Log;
+        {Log, PrevIndex} ->
           ReversedLogs = lists:reverse(Log),
-          lists:sublist(ReversedLogs, PrevIndex+1, length(Log))
+          io:format("[~p] before lists:reversed
+          ReversedLogs: ~p,
+          PrevIndex: ~p,
+          Log: ~p~n", [self(), ReversedLogs, PrevIndex, Log]),
+          lists:reverse(lists:sublist(ReversedLogs, PrevIndex + 1, length(Log)))
       end,
-
-
-%%      ToBeSentEntries = get_log_nth(Log, LastIndex - PrevIndex, []),
 
       PrevTerm = case ToBeSentEntries of
                    [] -> 0 ;
@@ -824,80 +836,3 @@ get_log_nth(Logs, N, Acc) when N =:= 0 ->
   Acc;
 get_log_nth([H|T], N, Acc0) ->
   get_log_nth(T, N-1, [H|Acc0]).
-
-concat_log_entries(Logs, LogsFromLeader, PrevIndex) ->
-  ReversedLogs = lists:reverse(Logs),
-  ReversedLogsFromLeaders = lists:reverse(LogsFromLeader),
-  InitIndex = PrevIndex,
-  io:format("[~p] Node ~p. before concat_log_entries
-  ReversedLogs: ~p,
-  ReversedLogsFromLeaders: ~p,
-  InitIndex: ~p~n", [self(), my_name(), ReversedLogs, ReversedLogsFromLeaders, InitIndex]),
-  {ReversedConcatLogs, Index} = concat_log_entries(ReversedLogs, ReversedLogsFromLeaders, InitIndex, false),
-  {lists:reverse(ReversedConcatLogs), Index}.
-
-concat_log_entries(Logs, LogsFromLeader, Index, _IsDifferent)
-  when length(LogsFromLeader) < Index ->
-  io:format("HERE1~n",[]),
-  {Logs, Index};
-
-concat_log_entries([], LogsFromLeader, Index, true) ->
-  % 틀린 부분을 찾으면, 그 앞부분까지만 남기고 다 날린다.
-  % 그리고 Leader로부터 받은 로그를 추가한다.
-  % 불일치가 발견되면 truncate 후 append
-  io:format("HERE2
-  LogsFromLeader: ~p
-  Index: ~p~n",[LogsFromLeader, Index]),
-  {LogsFromLeader, Index};
-
-concat_log_entries(Logs, LogsFromLeader, Index, true)
-  when length(LogsFromLeader) =< Index ->
-  % 틀린 부분을 찾으면, 그 앞부분까지만 남기고 다 날린다.
-  % 그리고 Leader로부터 받은 로그를 추가한다.
-  % 불일치가 발견되면 truncate 후 append
-  io:format("HERE2.1~n",[]),
-  {lists:sublist(Logs, 1, Index-1) ++ LogsFromLeader, Index};
-
-concat_log_entries([]=Logs0, LogsFromLeader, Index, false) when Index =:= 0 ->
-  % Leader는 내가 0번까지만 보낸 거라고 생각한다.
-  % 따라서 내가 가지고 있는 Logs Entry는 0이 맞다. -> 코너 케이스이므로, 그냥 여기서 마무리하면 된다.
-  % 혹은 더 가지고 있을 수도 있음.
-  io:format("HERE2.5
-  Logs: ~p,
-  LogsFromLeader: ~p,
-  Index: ~p~n", [Logs0, LogsFromLeader, Index]),
-  concat_log_entries(Logs0, LogsFromLeader, length(LogsFromLeader), true);
-
-concat_log_entries(Logs0, LogsFromLeader, Index, false) when Index =:= 0 ->
-  % Leader는 내가 0번까지만 보낸 거라고 생각한다.
-  % 따라서 내가 가지고 있는 Logs Entry는 0이 맞다. -> 코너 케이스이므로, 그냥 여기서 마무리하면 된다.
-  % 혹은 더 가지고 있을 수도 있음.
-  io:format("HERE2.6~n", []),
-  concat_log_entries(Logs0, LogsFromLeader, Index+1, true);
-
-concat_log_entries(Logs0, [Head|Rest], Index, false) ->
-  io:format("HERE3.1
-  Index: ~p,
-  Logs: ~p~n",[Index, Logs0]),
-  {LogTerm, _Entry} = lists:nth(Index, Logs0),
-  io:format("HERE3.2~n",[]),
-  {LogTermFromLeader, _Entry} = Head,
-
-  io:format("HERE3.3~n",[]),
-  IsDifferent = LogTerm =/= LogTermFromLeader,
-  io:format("HERE3.4~n",[]),
-  concat_log_entries(Logs0, Rest, Index+1, IsDifferent).
-
-get_log_term(0, _) ->
-  -1;
-get_log_term(Index, ReverseLogs) ->
-  io:format("get_log_term
-  Index: ~p,
-  ReversedLogs: ~p~n", [Index, ReverseLogs]),
-  case ReverseLogs of
-
-    [] -> -1;
-    ReverseLogs ->
-      {MyPrevLogTerm, _Entry} = lists:nth(Index, ReverseLogs),
-      MyPrevLogTerm
-  end.
