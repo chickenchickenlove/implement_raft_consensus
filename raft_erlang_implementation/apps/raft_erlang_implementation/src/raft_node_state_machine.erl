@@ -232,20 +232,7 @@ follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
 
   io:format("[~p] Node ~p got append_entries3 from ~p. ~n", [self(), my_name(), LeaderName]),
   NewLeader = LeaderName,
-  ReverseLogs = lists:reverse(Logs),
-
-  io:format("[~p] Node ~p got append_entries3 from ~p
-  PrevLogIndex : ~p,
-  ReverseLogs: ~p~n", [self(), my_name(), LeaderName, PrevLogIndex, ReverseLogs]),
-
   IsSuccess = raft_rpc_append_entries:should_append_entries(PrevLogIndex, PrevLogTerm, Logs),
-
-%%  IsSuccess = (PrevLogIndex =:= 0 orelse
-%%               (PrevLogIndex =< length(Logs) andalso PrevLogTerm =:=  MyPrevLogTerm)
-%%              ),
-
-  io:format("[~p] isSuccess ~p ~n", [self(), IsSuccess]),
-
   {UpdatedLogEntries, CommitIndex, MatchIndex}
     = case IsSuccess of
             true ->
@@ -259,11 +246,6 @@ follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
               {Logs, CommitIndex0, ?INVALID_MATCH_INDEX}
           end,
 
-  io:format("[~p]
-   LogsFromLeader: ~p
-   UpdatedLogEntries: ~p,
-   CommitIndex: ~p,
-   MatchIndex: ~p~n", [self(), LogsFromLeader, UpdatedLogEntries, CommitIndex, MatchIndex]),
   ToPid = get_node_pid(LeaderName),
   AckAppendEntries = raft_rpc_append_entries:new_ack(my_name(), CurrentTerm, true, MatchIndex),
   Msg = {ack_append_entries, AckAppendEntries},
@@ -498,7 +480,13 @@ leader(cast, do_append_entries, Data0) ->
   Data1 = schedule_append_entries(Data0),
   #?MODULE{members=Members} = Data1,
   MembersExceptMe = sets:to_list(sets:del_element(my_name(), Members)),
-  Data2 = do_append_entries(MembersExceptMe, Data1),
+
+  #?MODULE{match_index=MatchIndex, rpc_due=RpcDue0, log_entries=LogEntries, next_index=NextIndex,
+           current_term=CurrentTerm, commit_index=CommitIndex} = Data0,
+
+  RpcDue = raft_rpc_append_entries:do_append_entries1(MembersExceptMe, MatchIndex, LogEntries, NextIndex,
+                                                      CurrentTerm, CommitIndex, RpcDue0),
+  Data2 = Data1#?MODULE{rpc_due=RpcDue},
   {keep_state, Data2};
 
 leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm}=AppendEntriesRpc},
@@ -526,6 +514,7 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
   #ack_append_entries{success=Success, match_index=NodeMatchIndex, node_name=NodeName} = AckAppendEntries,
   #?MODULE{match_index=MatchIndex0, next_index=NextIndex0} = Data0,
 
+  % TODO: MatchIndex를 모아서, Leader의 Commit Index를 올리는 코드 들어가야 함.
   {MatchIndex, NextIndex} =
     case Success of
       true ->
@@ -578,7 +567,6 @@ leader({call, From}, {new_entry, Entry}, Data0) ->
 leader(EventType, EventContent, Data) ->
   handle_event(EventType, EventContent, leader, Data).
 
-%%{next_state, follower, Data, [{reply, From, candidate}]};
 handle_event({call, From}, get_timer, State, Data) ->
   #?MODULE{election_timeout_timer=Timer}=Data,
   {keep_state, Data, [{reply, From, Timer}]};
@@ -654,23 +642,9 @@ schedule_append_entries(Data0) ->
   {ok, Timer} = timer:apply_after(NextScheduled, gen_statem, cast, [self(), do_append_entries]),
   Data0#?MODULE{append_entries_timer=Timer}.
 
-get_node_name_by_pid(Pid) ->
-  case erlang:process_info(Pid, registered_name) of
-    {registered_name, Name} -> Name;
-    _ -> undefined
-  end.
 
 my_name() ->
-  node_name(self()).
-
-node_name(Pid) ->
-  case erlang:process_info(Pid, registered_name) of
-    {registered_name, Name} -> Name;
-    _ -> undefined
-  end.
-
-get_node_pid(NodeName) ->
-  whereis(NodeName).
+  raft_util:my_name().
 
 step_down(NewTerm, Data0) ->
   Data1 = Data0#?MODULE{current_term=NewTerm,
@@ -706,22 +680,12 @@ handle_request_vote_rpc(Data0, VoteArgs) ->
 next_event(CastOrCall, Args) ->
   {next_event, CastOrCall, Args}.
 
-current_time() ->
-  os:system_time(millisecond).
-
-is_rpc_expired(MemorizedTime) ->
-  Now = current_time(),
-  MemorizedTime < Now.
-
 infinity_rpc_due() ->
-  current_time() * 10.
+  raft_rpc_timer_utils:infinity_rpc_due().
 
 next_rpc_due() ->
-  current_time() + ?RPC_TIMEOUT.
+  raft_rpc_timer_utils:next_rpc_due().
 
-next_rpc_due_divide_by(DivideNum) ->
-  DividedRpcTimeout = ?RPC_TIMEOUT div DivideNum,
-  current_time() + DividedRpcTimeout.
 
 init_rpc_due(Members) ->
   MustExpiredTime = 0,
@@ -751,88 +715,5 @@ log_term([Head|_Tail], _Index) ->
   {Term, _Log} = Head,
   Term.
 
-
-%%send AppendEntries to peer
-%%   on (state == LEADER and
-%%        (matchIndex[peer] < len(log) or
-%%          rpcDue[peer] < now()):
-%%   | rpcDue[peer] = now() + ELECTION_TIMEOUT / 2
-%%   | prevIndex = nextIndex[peer] - 1
-%%   | lastIndex := choose in (nextIndex[peer] - 1)..len(log)
-%%   | nextIndex[peer] = lastIndex
-%%   | send AppendEntries to peer {
-%%   |   term: currentTerm,
-%%   |   prevTerm: getTerm(prevIndex),
-%%   |   entries: log[prevIndex+1..lastIndex],
-%%   |   commitIndex: commitIndex}
-
-do_append_entries([], Data) ->
-  Data;
-do_append_entries([Member|Rest], Data0) ->
-  #?MODULE{match_index=MatchIndex, rpc_due=RpcDue0, log_entries=Log, next_index=NextIndex,
-          current_term=CurrentTerm, commit_index=CommitIndex} = Data0,
-  MatchIndexOfMember = maps:get(Member, MatchIndex),
-  HasLagOfLog = MatchIndexOfMember < length(Log),
-
-  RpcDueOfMember = maps:get(Member, RpcDue0),
-  IsRpcExpired = is_rpc_expired(RpcDueOfMember),
-
-  case HasLagOfLog orelse IsRpcExpired of
-    true ->
-      % TODO HERE
-      NextRpcExpiredTime = next_rpc_due_divide_by(2),
-      RpcDue = maps:put(Member, NextRpcExpiredTime, RpcDue0),
-
-      io:format("NextIndex0 :~p~n", [NextIndex]),
-      %%% NextIndex는 다음에 보낼 것을 의미한다.
-      %%% 1. 따라서 나는 NextIndex 전부터 -> 마지막 로그까지를 다 보내면 된다.
-      %%% 2. 내가 보내는 로그는 PrevIndex를 포함해야한다. 그리고 Follower에서 PrevIndex가 맞는 곳을 찾아야 한다.
-      %%% 3. 아마 대부분 PrevIndex는 맞을 것이다.
-      %%% 3. 맞지 않는 부분부터 내가 보낸 로그를 붙여넣으면 된다.
-      PrevIndex = maps:get(Member, NextIndex) - 1,
-
-      ToBeSentEntries = case {Log, PrevIndex} of
-        {[], _} -> [];
-        {Log, 0} -> Log;
-        {Log, PrevIndex} ->
-          ReversedLogs = lists:reverse(Log),
-          io:format("[~p] before lists:reversed
-          ReversedLogs: ~p,
-          PrevIndex: ~p,
-          Log: ~p~n", [self(), ReversedLogs, PrevIndex, Log]),
-          lists:reverse(lists:sublist(ReversedLogs, PrevIndex + 1, length(Log)))
-      end,
-
-      PrevTerm = case ToBeSentEntries of
-                   [] -> 0 ;
-                   [Head0 | _Tail0] ->
-                     {Term0, _Log0} = Head0,
-                     Term0
-                 end,
-
-      AppendEntriesRpc = raft_rpc_append_entries:new(CurrentTerm, my_name(), PrevIndex, PrevTerm, ToBeSentEntries, CommitIndex),
-      AppendEntriesRpcMsg = {append_entries, AppendEntriesRpc},
-
-      io:format("[~p] do_append_entries
-      Member: ~p,
-      NextIndex: ~p,
-      Log: ~p,
-      CurrentTerm: ~p,
-      PrevIndex: ~p,
-      PrevTerm: ~p,
-      ToBeSentEntries: ~p,
-      CommitIndex: ~p~n", [self(), Member, NextIndex, Log, CurrentTerm, PrevIndex, PrevTerm, ToBeSentEntries, CommitIndex]),
-      ToMemberPid = get_node_pid(Member),
-      gen_statem:cast(ToMemberPid, AppendEntriesRpcMsg),
-      Data1 = Data0#?MODULE{rpc_due=RpcDue, next_index=NextIndex},
-      do_append_entries(Rest, Data1);
-    false ->
-      do_append_entries(Rest, Data0)
-  end.
-
-get_log_nth([], N, Acc) ->
-  Acc;
-get_log_nth(Logs, N, Acc) when N =:= 0 ->
-  Acc;
-get_log_nth([H|T], N, Acc0) ->
-  get_log_nth(T, N-1, [H|Acc0]).
+get_node_pid(NodeName) ->
+  raft_util:get_node_pid(NodeName).

@@ -278,6 +278,7 @@ leader_should_send_append_entries_test() ->
   raft_node_state_machine:stop('A'),
   raft_node_state_machine:stop('B').
 
+%%%% TODO : Flaky Test
 when_client_send_new_entry_to_leader_then_leader_should_keep_it_test() ->
   %%% SETUP
   flush_msg_(),
@@ -354,7 +355,7 @@ when_client_send_two_new_entry_to_leader_then_it_should_propagate_to_follower_te
   Result2 = raft_node_state_machine:add_entry(PidA, "Hello2"),
 
   %%% THEN
-  timer:sleep(1000),
+  timer:sleep(100),
   PidBEntries = raft_node_state_machine:get_log_entries(PidB),
   PidCEntries = raft_node_state_machine:get_log_entries(PidC),
 
@@ -369,9 +370,42 @@ when_client_send_two_new_entry_to_leader_then_it_should_propagate_to_follower_te
   raft_node_state_machine:stop('C').
 
 
-%%raft_util:set_timer_time(1000),
-%%raft_node_state_machine:start('A', ['A', 'B', 'C']),
-%%raft_node_state_machine:start('B', ['A', 'B', 'C']).
+when_client_send_two_new_entry_to_leader_immediately_then_it_should_propagate_to_follower_test() ->
+  %%% SETUP
+  flush_msg_(),
+
+  %%% GIVEN
+  raft_util:set_timer_time(50),
+  {ok, PidA} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  timer:sleep(50),
+  {ok, PidB} = raft_node_state_machine:start('B', ['A', 'B', 'C']),
+  {ok, PidC} = raft_node_state_machine:start('C', ['A', 'B', 'C']),
+
+  timer:sleep(200),
+
+  %%% WHEN -> election timeout can occur at least 5 times.
+  Result1 = raft_node_state_machine:add_entry(PidA, "Hello1"),
+  Result2 = raft_node_state_machine:add_entry(PidA, "Hello2"),
+
+  %%% THEN
+  timer:sleep(100),
+  PidAEntries = raft_node_state_machine:get_log_entries(PidA),
+  PidBEntries = raft_node_state_machine:get_log_entries(PidB),
+  PidCEntries = raft_node_state_machine:get_log_entries(PidC),
+
+  ?assertEqual(success, Result1),
+  ?assertEqual(success, Result2),
+  ?assertEqual([{1, "Hello2"}, {1, "Hello1"}], PidAEntries),
+  ?assertEqual([{1, "Hello2"}, {1, "Hello1"}], PidBEntries),
+  ?assertEqual([{1, "Hello2"}, {1, "Hello1"}], PidCEntries),
+
+  %%% CLEAN UP
+  raft_node_state_machine:stop('A'),
+  raft_node_state_machine:stop('B'),
+  raft_node_state_machine:stop('C').
+
+
+
 
 
 flush_msg_() ->

@@ -3,6 +3,9 @@
 %% API
 -export([set_timer_time/1, get_timer_time/0, clean_up_timer_time/0]).
 -export([get_election_timeout_divided_by/1]).
+-export([get_node_pid/1]).
+-export([my_name/0]).
+-export([node_name/1]).
 
 clean_up_timer_time() ->
   catch persistent_term:erase(election_timeout).
@@ -21,3 +24,14 @@ get_election_timeout_divided_by(DividedNumber) ->
   ElectionTimeout = get_timer_time(),
   ElectionTimeout div DividedNumber.
 
+get_node_pid(NodeName) ->
+  whereis(NodeName).
+
+my_name() ->
+  node_name(self()).
+
+node_name(Pid) ->
+  case erlang:process_info(Pid, registered_name) of
+    {registered_name, Name} -> Name;
+    _ -> undefined
+  end.
