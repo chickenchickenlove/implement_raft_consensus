@@ -118,33 +118,36 @@ do_append_entries([Member|Rest], MatchIndex, LogEntries, NextIndex, CurrentTerm,
   IsRpcExpired = raft_rpc_timer_utils:is_rpc_expired(RpcDueOfMember),
 
   case HasLagOfLog orelse IsRpcExpired of
-    false -> do_append_entries1(Rest, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc0);
+    false -> do_append_entries(Rest, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc0);
     true ->
       NextRpcExpiredTime = raft_rpc_timer_utils:next_rpc_due_divide_by(2),
       RpcDueAcc = maps:put(Member, NextRpcExpiredTime, RpcDueAcc0),
-      PrevIndex = min(maps:get(Member, NextIndex) - 1, 0),
+
+      PrevIndex = max(maps:get(Member, NextIndex) - 1, 0),
+      PrevTerm =
+        case {LogEntries, PrevIndex} of
+          {[], _} -> 0;
+          {LogEntries, 0} -> 0;
+          {LogEntries, PrevIndex} ->
+            ReversedLogs0 = lists:reverse(LogEntries),
+            {Term0, _} = lists:nth(PrevIndex, ReversedLogs0),
+            Term0
+        end,
 
       ToBeSentEntries = case {LogEntries, PrevIndex} of
                           {[], _} -> [];
                           {LogEntries, 0} -> LogEntries;
                           {LogEntries, PrevIndex} ->
-                            ReversedLogs = lists:reverse(LogEntries),
-                            lists:reverse(lists:sublist(ReversedLogs, PrevIndex + 1, length(LogEntries)))
+                            ReversedLogs1 = lists:reverse(LogEntries),
+                            lists:reverse(lists:sublist(ReversedLogs1, PrevIndex + 1, length(LogEntries)))
                         end,
-
-      PrevTerm = case ToBeSentEntries of
-                   [] -> 0 ;
-                   [Head0 | _Tail0] ->
-                     {Term0, _Log0} = Head0,
-                     Term0
-                 end,
 
       AppendEntriesRpc = raft_rpc_append_entries:new(CurrentTerm, my_name(), PrevIndex, PrevTerm, ToBeSentEntries, CommitIndex),
       AppendEntriesRpcMsg = {append_entries, AppendEntriesRpc},
 
       ToMemberPid = raft_util:get_node_pid(Member),
       gen_statem:cast(ToMemberPid, AppendEntriesRpcMsg),
-      do_append_entries1(Rest, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc)
+      do_append_entries(Rest, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc)
   end.
 
 

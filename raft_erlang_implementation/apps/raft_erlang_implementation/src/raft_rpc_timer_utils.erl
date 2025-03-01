@@ -5,6 +5,7 @@
 -export([infinity_rpc_due/0]).
 -export([next_rpc_due/0]).
 -export([next_rpc_due_divide_by/1]).
+-export([current_time/0]).
 
 % unit : millisecond.
 -define(RPC_TIMEOUT, 50).
@@ -23,9 +24,9 @@ next_rpc_due_divide_by(DivideNum) ->
   DividedRpcTimeout = ?RPC_TIMEOUT div DivideNum,
   current_time() + DividedRpcTimeout.
 
+current_time() ->
+  os:system_time(millisecond).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%% PRIVATE FUNCTION %%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-current_time() ->
-  os:system_time(millisecond).

@@ -176,7 +176,8 @@ init({NodeName, Members}) ->
 
 stop(NodeName) ->
   Pid = get_node_pid(NodeName),
-  gen_statem:stop(Pid).
+  gen_statem:stop(Pid),
+  timer:sleep(50).
 
 % 5.1 Raft Basics
 % The leader handles all client requests (if a client contacts a follower,
@@ -484,7 +485,7 @@ leader(cast, do_append_entries, Data0) ->
   #?MODULE{match_index=MatchIndex, rpc_due=RpcDue0, log_entries=LogEntries, next_index=NextIndex,
            current_term=CurrentTerm, commit_index=CommitIndex} = Data0,
 
-  RpcDue = raft_rpc_append_entries:do_append_entries1(MembersExceptMe, MatchIndex, LogEntries, NextIndex,
+  RpcDue = raft_rpc_append_entries:do_append_entries(MembersExceptMe, MatchIndex, LogEntries, NextIndex,
                                                       CurrentTerm, CommitIndex, RpcDue0),
   Data2 = Data1#?MODULE{rpc_due=RpcDue},
   {keep_state, Data2};

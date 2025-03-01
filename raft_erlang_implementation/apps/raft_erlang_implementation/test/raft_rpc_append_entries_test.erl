@@ -1,7 +1,8 @@
 -module(raft_rpc_append_entries_test).
 
 %% API
--export([]).
+-export([loop_/1]).
+-include("rpc_record.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 
@@ -409,3 +410,259 @@ concat_entries27_test() ->
   %% THEN
   ?assertEqual([{1, "A1"}, {3, "A2"}, {5, "A3"}, {7, "A4"}, {9, "A5"}], UpdatedLogs),
   ?assertEqual(5, MatchIndex).
+
+
+
+do_append_entries1_test() ->
+  % If RpcDueTime has been expired and there are no logs to send to, it send append_entry rpc to each member.
+  % SETUP
+  PidA = start_dummy('A'),
+  PidB = start_dummy('B'),
+  PidC = start_dummy('C'),
+
+  % GIVEN
+  RpcDueTime = raft_rpc_timer_utils:current_time() ,
+
+  MembersExceptMe = ['A', 'B', 'C'],
+  MatchIndex = #{'A' => 0, 'B' => 0, 'C' => 0},
+  LogEntries = [],
+  NextIndex = #{'A' => 1, 'B' => 1, 'C' => 1},
+  CurrentTerm = 1,
+  CommitIndex = 0,
+  RpcDueAcc0 = #{'A' => RpcDueTime, 'B' => RpcDueTime, 'C' => RpcDueTime},
+
+  % WHEN
+  timer:sleep(100),
+  ResultRpcDue = raft_rpc_append_entries:do_append_entries(MembersExceptMe, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc0),
+
+  % THEN
+  Timeout = 500,
+  MsgsFromA = get_messages(PidA, Timeout),
+  MsgsFromB = get_messages(PidB, Timeout),
+  MsgsFromC = get_messages(PidC, Timeout),
+
+  ExpectedAppendEntryMsg = {append_entries, #append_entries{term=1,
+                                                            leader_name=undefined,
+                                                            previous_log_index=0,
+                                                            previous_log_term=0,
+                                                            entries=[],
+                                                            leader_commit_index=0}},
+
+
+  ?assertEqual([ExpectedAppendEntryMsg], MsgsFromA),
+  ?assertEqual([ExpectedAppendEntryMsg], MsgsFromB),
+  ?assertEqual([ExpectedAppendEntryMsg], MsgsFromC),
+  ?assert(maps:get('A', ResultRpcDue) > RpcDueTime),
+  ?assert(maps:get('B', ResultRpcDue) > RpcDueTime),
+  ?assert(maps:get('C', ResultRpcDue) > RpcDueTime).
+
+do_append_entries2_test() ->
+  % If RpcDueTime has been not expired and there are no logs to send to, it not send append_entry rpc to member.
+  % SETUP
+  PidA = start_dummy('A'),
+  PidB = start_dummy('B'),
+  PidC = start_dummy('C'),
+
+  % GIVEN
+  RpcDueTime = raft_rpc_timer_utils:current_time() * 2 ,
+
+  MembersExceptMe = ['A', 'B', 'C'],
+  MatchIndex = #{'A' => 0, 'B' => 0, 'C' => 0},
+  LogEntries = [],
+  NextIndex = #{'A' => 1, 'B' => 1, 'C' => 1},
+  CurrentTerm = 1,
+  CommitIndex = 0,
+  RpcDueAcc0 = #{'A' => RpcDueTime, 'B' => RpcDueTime, 'C' => RpcDueTime},
+
+  % WHEN
+  ResultRpcDue = raft_rpc_append_entries:do_append_entries(MembersExceptMe, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc0),
+
+  % THEN
+  Timeout = 500,
+  MsgsFromA = get_messages(PidA, Timeout),
+  MsgsFromB = get_messages(PidB, Timeout),
+  MsgsFromC = get_messages(PidC, Timeout),
+
+  ?assertEqual([], MsgsFromA),
+  ?assertEqual([], MsgsFromB),
+  ?assertEqual([], MsgsFromC),
+
+  ?assertEqual(maps:get('A', ResultRpcDue), RpcDueTime),
+  ?assertEqual(maps:get('B', ResultRpcDue), RpcDueTime),
+  ?assertEqual(maps:get('C', ResultRpcDue), RpcDueTime).
+
+
+do_append_entries3_test() ->
+  % If RpcDueTime has been not expired and there are logs to send to, it send append_entry rpc to member.
+
+  %%% SETUP
+  PidA = start_dummy('A'),
+  PidB = start_dummy('B'),
+  PidC = start_dummy('C'),
+
+  %%% GIVEN
+  CurrentTime = raft_rpc_timer_utils:current_time() * 2,
+
+  MembersExceptMe = ['A', 'B', 'C'],
+  MatchIndex = #{'A' => 0, 'B' => 0, 'C' => 0},
+  LogEntries = [{1, "A2"}, {1, "A1"}],
+  NextIndex = #{'A' => 1, 'B' => 1, 'C' => 1},
+  CurrentTerm = 1,
+  CommitIndex = 0,
+  RpcDueAcc0 = #{'A' => CurrentTime, 'B' => CurrentTime, 'C' => CurrentTime},
+
+  % WHEN
+  timer:sleep(100),
+  ResultRpcDue = raft_rpc_append_entries:do_append_entries(MembersExceptMe, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc0),
+
+  % THEN
+  timer:sleep(100),
+  Timeout = 500,
+  MsgsFromA = get_messages(PidA, Timeout),
+  MsgsFromB = get_messages(PidB, Timeout),
+  MsgsFromC = get_messages(PidC, Timeout),
+  ExpectedAppendEntryMsg = {append_entries, #append_entries{term=1,
+                                                            leader_name=undefined,
+                                                            previous_log_index=0,
+                                                            previous_log_term=0,
+                                                            entries=[{1, "A2"}, {1, "A1"}],
+                                                            leader_commit_index=0}},
+
+  ?assertEqual([ExpectedAppendEntryMsg], MsgsFromA),
+  ?assertEqual([ExpectedAppendEntryMsg], MsgsFromB),
+  ?assertEqual([ExpectedAppendEntryMsg], MsgsFromC),
+
+  ?assert(maps:get('A', ResultRpcDue) =/= CurrentTime),
+  ?assert(maps:get('B', ResultRpcDue) =/= CurrentTime),
+  ?assert(maps:get('C', ResultRpcDue) =/= CurrentTime).
+
+
+do_append_entries4_test() ->
+  % If RpcDueTime has been expired and there are logs to send to, it send append_entry rpc to member.
+
+  %%% SETUP
+  PidA = start_dummy('A'),
+  PidB = start_dummy('B'),
+  PidC = start_dummy('C'),
+
+  %%% GIVEN
+  CurrentTime = raft_rpc_timer_utils:current_time(),
+
+  MembersExceptMe = ['A', 'B', 'C'],
+  MatchIndex = #{'A' => 0, 'B' => 0, 'C' => 0},
+  LogEntries = [{1, "A2"}, {1, "A1"}],
+  NextIndex = #{'A' => 1, 'B' => 1, 'C' => 1},
+  CurrentTerm = 1,
+  CommitIndex = 0,
+  RpcDueAcc0 = #{'A' => CurrentTime, 'B' => CurrentTime, 'C' => CurrentTime},
+
+  % WHEN
+  timer:sleep(100),
+  ResultRpcDue = raft_rpc_append_entries:do_append_entries(MembersExceptMe, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc0),
+
+  % THEN
+  timer:sleep(100),
+  Timeout = 500,
+  MsgsFromA = get_messages(PidA, Timeout),
+  MsgsFromB = get_messages(PidB, Timeout),
+  MsgsFromC = get_messages(PidC, Timeout),
+  ExpectedAppendEntryMsg = {append_entries, #append_entries{term=1,
+                                                            leader_name=undefined,
+                                                            previous_log_index=0,
+                                                            previous_log_term=0,
+                                                            entries=[{1, "A2"}, {1, "A1"}],
+                                                            leader_commit_index=0}},
+
+  ?assertEqual([ExpectedAppendEntryMsg], MsgsFromA),
+  ?assertEqual([ExpectedAppendEntryMsg], MsgsFromB),
+  ?assertEqual([ExpectedAppendEntryMsg], MsgsFromC),
+
+  ?assert(maps:get('A', ResultRpcDue) =/= CurrentTime),
+  ?assert(maps:get('B', ResultRpcDue) =/= CurrentTime),
+  ?assert(maps:get('C', ResultRpcDue) =/= CurrentTime).
+
+do_append_entries5_test() ->
+  % If RpcDueTime has been expired and there are logs to send to, it send append_entry rpc to member.
+
+  %%% SETUP
+  PidA = start_dummy('A'),
+  PidB = start_dummy('B'),
+  PidC = start_dummy('C'),
+  PidD = start_dummy('D'),
+
+  %%% GIVEN
+  CurrentTime = raft_rpc_timer_utils:current_time(),
+  NotExpiredTime = CurrentTime * 2,
+
+  MembersExceptMe = ['A', 'B', 'C', 'D'],
+  MatchIndex = #{'A' => 0, 'B' => 1, 'C' => 2, 'D' => 2},
+  LogEntries = [{1, "A2"}, {1, "A1"}],
+  NextIndex = #{'A' => 1, 'B' => 2, 'C' => 3, 'D' => 3},
+  CurrentTerm = 1,
+  CommitIndex = 0,
+  RpcDueAcc0 = #{'A' => CurrentTime, 'B' => CurrentTime, 'C' => NotExpiredTime, 'D' => CurrentTime},
+
+  % WHEN
+  timer:sleep(100),
+  ResultRpcDue = raft_rpc_append_entries:do_append_entries(MembersExceptMe, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc0),
+
+  % THEN
+  timer:sleep(100),
+  Timeout = 500,
+  MsgsFromA = get_messages(PidA, Timeout),
+  MsgsFromB = get_messages(PidB, Timeout),
+  MsgsFromC = get_messages(PidC, Timeout),
+  MsgsFromD = get_messages(PidD, Timeout),
+  ExpectedAppendEntryMsgA = {append_entries, #append_entries{term=1,
+                                                            leader_name=undefined,
+                                                            previous_log_index=0,
+                                                            previous_log_term=0,
+                                                            entries=[{1, "A2"}, {1, "A1"}],
+                                                            leader_commit_index=0}},
+  ExpectedAppendEntryMsgB = {append_entries, #append_entries{term=1,
+                                                             leader_name=undefined,
+                                                             previous_log_index=1,
+                                                             previous_log_term=1,
+                                                             entries=[{1, "A2"}],
+                                                             leader_commit_index=0}},
+  ExpectedAppendEntryMsgC = [],
+  ExpectedAppendEntryMsgD = {append_entries, #append_entries{term=1,
+                                                             leader_name=undefined,
+                                                             previous_log_index=2,
+                                                             previous_log_term=1,
+                                                             entries=[],
+                                                             leader_commit_index=0}},
+
+  ?assertEqual([ExpectedAppendEntryMsgA], MsgsFromA),
+  ?assertEqual([ExpectedAppendEntryMsgB], MsgsFromB),
+  ?assertEqual(ExpectedAppendEntryMsgC, MsgsFromC),
+  ?assertEqual([ExpectedAppendEntryMsgD], MsgsFromD),
+
+  ?assert(maps:get('A', ResultRpcDue) =/= CurrentTime),
+  ?assert(maps:get('B', ResultRpcDue) =/= CurrentTime),
+  ?assert(maps:get('C', ResultRpcDue) =/= CurrentTime).
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% TEST Util Function %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+loop_(Acc) ->
+  receive
+    {get, From} -> From ! Acc;
+    {'$gen_cast', Msg0} -> loop_([Msg0|Acc]);
+    Msg -> loop_([Msg|Acc])
+  end.
+
+
+start_dummy(Name) ->
+  Pid = spawn_link(raft_rpc_append_entries_test, loop_, [[]]),
+  register(Name, Pid),
+  Pid.
+
+get_messages(Pid, Timeout) ->
+  Pid ! {get, self()},
+  receive
+    Msg -> Msg
+  after Timeout ->
+    undefined
+  end.

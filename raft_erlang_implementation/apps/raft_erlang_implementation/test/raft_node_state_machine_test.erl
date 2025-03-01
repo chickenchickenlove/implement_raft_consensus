@@ -405,7 +405,7 @@ when_client_send_two_new_entry_to_leader_immediately_then_it_should_propagate_to
   raft_node_state_machine:stop('C').
 
 
-
+% TODO : InstallSnapshot 시나리오 추가 (노드 중 하나가 오랫동안 다운되었따가 재시작하는 시나리오)
 
 
 flush_msg_() ->
