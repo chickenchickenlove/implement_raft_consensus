@@ -11,9 +11,9 @@ initialized_test() ->
   {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
 
   %%% THEN
-  State = raft_node_state_machine:get_state(Pid),
-  CurrentTerm = raft_node_state_machine:get_current_term(Pid),
-  VotedCount = raft_node_state_machine:get_voted_count(Pid),
+  State = raft_api:get_state(Pid),
+  CurrentTerm = raft_api:get_current_term(Pid),
+  VotedCount = raft_api:get_voted_count(Pid),
 
   ?assertEqual(follower, State),
   ?assertEqual(0, CurrentTerm),
@@ -33,9 +33,9 @@ follow_turns_to_candidate_when_election_timeout_occur_test() ->
   timer:sleep(300),
 
   %%% THEN
-  State = raft_node_state_machine:get_state(Pid),
-  CurrentTerm = raft_node_state_machine:get_current_term(Pid),
-  VotedCount = raft_node_state_machine:get_voted_count(Pid),
+  State = raft_api:get_state(Pid),
+  CurrentTerm = raft_api:get_current_term(Pid),
+  VotedCount = raft_api:get_voted_count(Pid),
 
   ?assertEqual(candidate, State),
   ?assertEqual(1, CurrentTerm),
@@ -50,16 +50,16 @@ follower_should_refresh_its_timer_when_valid_candidate_sends_a_request_vote_rpc_
   %%% GIVEN
   raft_util:set_timer_time(150),
   {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
-  PreviousTimer = raft_node_state_machine:get_timer(Pid),
+  PreviousTimer = raft_api:get_timer(Pid),
   erlang:register('B', self()),
   ValidTermId = 10,
 
   %%% WHEN
   NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', ValidTermId, 10, 10),
-  raft_node_state_machine:request_vote(Pid, NewRequestVoted),
+  raft_rpc_request_vote:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
-  CurrentTimer = raft_node_state_machine:get_timer(Pid),
+  CurrentTimer = raft_api:get_timer(Pid),
   ?assertNotEqual(PreviousTimer, CurrentTimer),
 
   %%% CLEAN UP
@@ -79,7 +79,7 @@ follower_should_ack_vote_when_valid_candidate_sends_a_request_vote_rpc_test() ->
   %%% WHEN
   ValidTermId = 10,
   NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', ValidTermId, 10, 10),
-  raft_node_state_machine:request_vote(Pid, NewRequestVoted),
+  raft_rpc_request_vote:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
   AckVotedMsg = receive
@@ -108,11 +108,11 @@ follower_should_update_its_state_when_valid_candidate_sends_a_request_vote_rpc_t
   %%% WHEN
   ValidTermId = 10,
   NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', ValidTermId, 10, 10),
-  raft_node_state_machine:request_vote(Pid, NewRequestVoted),
+  raft_rpc_request_vote:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
-  CurrentTerm = raft_node_state_machine:get_current_term(Pid),
-  VotedFor = raft_node_state_machine:get_voted_for(Pid),
+  CurrentTerm = raft_api:get_current_term(Pid),
+  VotedFor = raft_api:get_voted_for(Pid),
 
   ?assertEqual(ValidTermId, CurrentTerm),
   ?assertEqual('B', VotedFor),
@@ -130,17 +130,17 @@ follower_should_not_refresh_its_timer_when_invalid_candidate_sends_a_requested_r
   %%% GIVEN
   raft_util:set_timer_time(150),
   {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
-  PreviousTimer = raft_node_state_machine:get_timer(Pid),
+  PreviousTimer = raft_api:get_timer(Pid),
 
   erlang:register('B', self()),
 
   %%% WHEN
   InvalidTermId = -1,
   NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', InvalidTermId, 10, 10),
-  raft_node_state_machine:request_vote(Pid, NewRequestVoted),
+  raft_rpc_request_vote:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
-  CurrentTimer = raft_node_state_machine:get_timer(Pid),
+  CurrentTimer = raft_api:get_timer(Pid),
   ?assertEqual(PreviousTimer, CurrentTimer),
 
   %%% CLEAN UP
@@ -157,13 +157,13 @@ follower_should_not_voted_when_invalid_candidate_sends_a_request_vote_rpc_test()
   raft_util:set_timer_time(150),
   {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
 
-  CurrentTerm = raft_node_state_machine:get_current_term(Pid),
+  CurrentTerm = raft_api:get_current_term(Pid),
   erlang:register('B', self()),
 
   %%% WHEN
   InvalidTermId = -1,
   NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', InvalidTermId, 20, 30),
-  raft_node_state_machine:request_vote(Pid, NewRequestVoted),
+  raft_rpc_request_vote:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
   AckVotedMsg = receive
@@ -189,17 +189,17 @@ follower_should_not_update_its_state_when_invalid_candidate_sends_a_request_vote
   raft_util:set_timer_time(150),
   {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
 
-  CurrentTerm = raft_node_state_machine:get_current_term(Pid),
+  CurrentTerm = raft_api:get_current_term(Pid),
   erlang:register('B', self()),
 
   %%% WHEN
   InvalidTermId = -1,
   NewRequestVoted = raft_rpc_request_vote:new_request_vote('B', InvalidTermId, 20, 30),
-  raft_node_state_machine:request_vote(Pid, NewRequestVoted),
+  raft_rpc_request_vote:request_vote(Pid, NewRequestVoted),
 
   %%% THEN
-  AfterCurrentTerm = raft_node_state_machine:get_current_term(Pid),
-  AfterVotedFor = raft_node_state_machine:get_voted_for(Pid),
+  AfterCurrentTerm = raft_api:get_current_term(Pid),
+  AfterVotedFor = raft_api:get_voted_for(Pid),
 
   ?assertEqual(CurrentTerm, AfterCurrentTerm),
   ?assertEqual(undefined, AfterVotedFor),
@@ -222,9 +222,9 @@ candidate_turns_to_leader_immediately_if_alone_in_cluster_test() ->
   timer:sleep(300),
 
   %%% THEN
-  State = raft_node_state_machine:get_state(Pid),
-  CurrentTerm = raft_node_state_machine:get_current_term(Pid),
-  VotedCount = raft_node_state_machine:get_voted_count(Pid),
+  State = raft_api:get_state(Pid),
+  CurrentTerm = raft_api:get_current_term(Pid),
+  VotedCount = raft_api:get_voted_count(Pid),
 
   ?assertEqual(leader, State),
   ?assertEqual(1, CurrentTerm),
@@ -247,7 +247,7 @@ candidate_should_ignore_append_entries_with_older_term_test() ->
   gen_statem:cast(whereis('A'), {append_entries, OlderAppendEntries}),
 
   %%% THEN
-  State = raft_node_state_machine:get_state(Pid),
+  State = raft_api:get_state(Pid),
   ?assertEqual(candidate, State),
 
   %%% CLEAN UP
@@ -269,8 +269,8 @@ leader_should_send_append_entries_test() ->
   timer:sleep(500),
 
   %%% THEN
-  RaftStateA = raft_node_state_machine:get_state(PidA),
-  RaftStateB = raft_node_state_machine:get_state(PidB),
+  RaftStateA = raft_api:get_state(PidA),
+  RaftStateB = raft_api:get_state(PidB),
   ?assertEqual(leader, RaftStateA),
   ?assertEqual(follower, RaftStateB),
 
@@ -292,10 +292,10 @@ when_client_send_new_entry_to_leader_then_leader_should_keep_it_test() ->
   timer:sleep(200),
 
   %%% WHEN -> election timeout can occur at least 5 times.
-  Result = raft_node_state_machine:add_entry(PidA, "Hello"),
+  Result = raft_api:add_entry(PidA, "Hello"),
 
   %%% THEN
-  PidAEntries = raft_node_state_machine:get_log_entries(PidA),
+  PidAEntries = raft_api:get_log_entries(PidA),
 
   ?assertEqual(success, Result),
   ?assertEqual([{1, "Hello"}], PidAEntries),
@@ -319,12 +319,12 @@ when_client_send_new_entry_to_leader_then_it_should_propagate_to_follower_test()
   timer:sleep(200),
 
   %%% WHEN -> election timeout can occur at least 5 times.
-  Result = raft_node_state_machine:add_entry(PidA, "Hello"),
+  Result = raft_api:add_entry(PidA, "Hello"),
 
   %%% THEN
   timer:sleep(1000),
-  PidBEntries = raft_node_state_machine:get_log_entries(PidB),
-  PidCEntries = raft_node_state_machine:get_log_entries(PidC),
+  PidBEntries = raft_api:get_log_entries(PidB),
+  PidCEntries = raft_api:get_log_entries(PidC),
 
   ?assertEqual(success, Result),
   ?assertEqual([{1, "Hello"}], PidBEntries),
@@ -350,14 +350,14 @@ when_client_send_two_new_entry_to_leader_then_it_should_propagate_to_follower_te
   timer:sleep(200),
 
   %%% WHEN -> election timeout can occur at least 5 times.
-  Result1 = raft_node_state_machine:add_entry(PidA, "Hello1"),
+  Result1 = raft_api:add_entry(PidA, "Hello1"),
   timer:sleep(200),
-  Result2 = raft_node_state_machine:add_entry(PidA, "Hello2"),
+  Result2 = raft_api:add_entry(PidA, "Hello2"),
 
   %%% THEN
   timer:sleep(100),
-  PidBEntries = raft_node_state_machine:get_log_entries(PidB),
-  PidCEntries = raft_node_state_machine:get_log_entries(PidC),
+  PidBEntries = raft_api:get_log_entries(PidB),
+  PidCEntries = raft_api:get_log_entries(PidC),
 
   ?assertEqual(success, Result1),
   ?assertEqual(success, Result2),
@@ -384,14 +384,14 @@ when_client_send_two_new_entry_to_leader_immediately_then_it_should_propagate_to
   timer:sleep(200),
 
   %%% WHEN -> election timeout can occur at least 5 times.
-  Result1 = raft_node_state_machine:add_entry(PidA, "Hello1"),
-  Result2 = raft_node_state_machine:add_entry(PidA, "Hello2"),
+  Result1 = raft_api:add_entry(PidA, "Hello1"),
+  Result2 = raft_api:add_entry(PidA, "Hello2"),
 
   %%% THEN
   timer:sleep(100),
-  PidAEntries = raft_node_state_machine:get_log_entries(PidA),
-  PidBEntries = raft_node_state_machine:get_log_entries(PidB),
-  PidCEntries = raft_node_state_machine:get_log_entries(PidC),
+  PidAEntries = raft_api:get_log_entries(PidA),
+  PidBEntries = raft_api:get_log_entries(PidB),
+  PidCEntries = raft_api:get_log_entries(PidC),
 
   ?assertEqual(success, Result1),
   ?assertEqual(success, Result2),
