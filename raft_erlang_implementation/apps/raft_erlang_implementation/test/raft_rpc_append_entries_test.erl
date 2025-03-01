@@ -643,8 +643,49 @@ do_append_entries5_test() ->
   ?assert(maps:get('C', ResultRpcDue) =/= CurrentTime).
 
 
+commit_if_can1_test() ->
+  % MatchIndex, TotalMemberSize
+
+  %%% GIVEN
+  MatchIndex = #{'A' => 1, 'B' => 2, 'C' => 3, 'D' => 4},
+  MemberSize = 4,
+
+  %%% WHEN
+  CommitIndex = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize),
+
+  %%% THEN
+  ?assertEqual(2, CommitIndex).
+
+commit_if_can2_test() ->
+  % MatchIndex, TotalMemberSize
+
+  %%% GIVEN
+  MatchIndex = #{'A' => 1, 'B' => 4, 'C' => 4, 'D' => 4},
+  MemberSize = 4,
+
+  %%% WHEN
+  CommitIndex = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize),
+
+  %%% THEN
+  ?assertEqual(4, CommitIndex).
+
+
+commit_if_can3_test() ->
+  % MatchIndex, TotalMemberSize
+
+  %%% GIVEN
+  MatchIndex = #{'A' => 0, 'B' => 0, 'C' => 0, 'D' => 0},
+  MemberSize = 4,
+
+  %%% WHEN
+  CommitIndex = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize),
+
+  %%% THEN
+  ?assertEqual(0, CommitIndex).
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%% TEST Util Function %%%
+%%%% TEST UTIL Function %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 loop_(Acc) ->
   receive

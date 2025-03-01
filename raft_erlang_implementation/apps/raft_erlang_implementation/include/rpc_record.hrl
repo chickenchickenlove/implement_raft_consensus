@@ -6,11 +6,11 @@
 %%  entries[]: log entries to store (empty for heartbeat; may send more than one for efficiency)
 %%  leaderCommit leader’s commitIndex
 -record(append_entries, {term :: integer(),
-  leader_name :: atom(),
-  previous_log_index :: integer(),
-  previous_log_term :: integer(),
-  entries = [] :: list(),
-  leader_commit_index :: integer()
+                         leader_name :: atom(),
+                         previous_log_index :: integer(),
+                         previous_log_term :: integer(),
+                         entries = [] :: list(),
+                         leader_commit_index :: integer()
 }).
 
 
@@ -21,6 +21,6 @@
                     candidate_last_log_term :: integer()}).
 
 -record(ack_append_entries, {node_name :: atom(),
-  node_term :: integer(),
-  success :: integer(),
-  match_index :: integer()}).
+                             node_term :: integer(),
+                             success :: integer(),
+                             match_index :: integer()}).

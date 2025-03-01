@@ -406,7 +406,8 @@ when_client_send_two_new_entry_to_leader_immediately_then_it_should_propagate_to
 
 
 % TODO : InstallSnapshot 시나리오 추가 (노드 중 하나가 오랫동안 다운되었따가 재시작하는 시나리오)
-
+% TODO : append_entries 결과를 받았을 때, Commit 올라가는 것을 확인.
+% TODO : Split vote 확인 및 해소되는 것 확인.
 
 flush_msg_() ->
   receive

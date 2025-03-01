@@ -45,10 +45,6 @@ start_election(Members, VoteArgs) ->
 has_quorum(TotalMemberSize, VotedMemberCount) ->
   VotedMemberCount >= (TotalMemberSize div 2) + 1.
 
-%% 리더 기반 합의 알고리즘에서는 리더가 모든 커밋된 로그를 포함해야 한다.
-% Raft는 리더가 선출될 때부터 모든 커밋된 로그를 보장하도록 설계됨.
-% 이를 통해 로그가 리더에서 팔로워로만 흐르게 유지할 수 있음.
-% 즉, 리더는 기존의 로그를 덮어쓰지 않는다.
 
 can_vote(VotedFor, FollowerTerm, FollowerLastLogTerm, FollowerLastLogIndex, VotedArgs) ->
   #vote_args{candidate_name=CandidateName,

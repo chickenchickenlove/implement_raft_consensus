@@ -242,6 +242,7 @@ follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
               %%  Therefore, the follower can't commit to an index it doesn't actually have, so it must eventually commit up to the value of min(leaderCommit, the actual last index).
               {UpdatedLogEntries0, MatchIndex0} = raft_rpc_append_entries:do_concat_entries(Logs, LogsFromLeader, PrevLogIndex),
               CommitIndex1 = min(LeaderCommitIndex, MatchIndex0),
+              % TODO : Apply Entries() 구현.
               {UpdatedLogEntries0, CommitIndex1, MatchIndex0};
             false ->
               {Logs, CommitIndex0, ?INVALID_MATCH_INDEX}
@@ -437,11 +438,7 @@ candidate(cast, {append_entries, AppendEntries}, Data0) ->
   %% For example, add commited log its local state.
   Data1 = schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
   NewTerm = raft_rpc_append_entries:get(term, AppendEntries),
-
   Data2 = Data1#?MODULE{current_term=NewTerm},
-
-  %%% TODO : 받았다는 응답을 Leader에게 보내줘야 할 수도 있음.
-  %%% 그래야 Leader도 Commit을 할꺼니까.
   {next_state, follower, Data2};
 
 candidate(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
@@ -513,22 +510,23 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
        #?MODULE{current_term=CurrentTerm}=Data0) when CurrentTerm =:= NodeTerm ->
   io:format("[~p] Node ~p got ack_append_entries. ~n", [self(), my_name()]),
   #ack_append_entries{success=Success, match_index=NodeMatchIndex, node_name=NodeName} = AckAppendEntries,
-  #?MODULE{match_index=MatchIndex0, next_index=NextIndex0} = Data0,
-
-  % TODO: MatchIndex를 모아서, Leader의 Commit Index를 올리는 코드 들어가야 함.
-  {MatchIndex, NextIndex} =
+  #?MODULE{match_index=MatchIndex0, next_index=NextIndex0, commit_index=CommitIndex0, members=Members} = Data0,
+  {MatchIndex, NextIndex, CommitIndex} =
     case Success of
       true ->
         MatchIndex1 = maps:put(NodeName, NodeMatchIndex, MatchIndex0),
         NextIndex1 = maps:put(NodeName, NodeMatchIndex + 1, NextIndex0),
-        {MatchIndex1, NextIndex1};
+        MaybeNewCommitIndex = raft_rpc_append_entries:commit_if_can(MatchIndex1, sets:size(Members)),
+        % TODO : Apply Entries(...) 구현
+        % LogEntires는 각 노드가 가지고 있는 로그의 상태이고, Commit이 되는 순간 Application에 반영되어야 함.
+        {MatchIndex1, NextIndex1, MaybeNewCommitIndex};
       false ->
         NewNextIndex = max(1, maps:get(NodeName, NextIndex0) - 1),
         NextIndex2 = maps:put(NodeName, NewNextIndex, NextIndex0),
-        {MatchIndex0, NextIndex2}
+        {MatchIndex0, NextIndex2, CommitIndex0}
     end,
 
-  Data1 = Data0#?MODULE{next_index=NextIndex, match_index=MatchIndex},
+  Data1 = Data0#?MODULE{next_index=NextIndex, match_index=MatchIndex, commit_index=CommitIndex},
   {keep_state, Data1};
 
 leader(cast, {ack_append_entries, _}, Data0) ->

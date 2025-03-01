@@ -3,6 +3,7 @@
 -include("rpc_record.hrl").
 
 %% API
+-export([commit_if_can/2]).
 -export([get/2]).
 -export([new/6]).
 -export([new_ack/4]).
@@ -150,6 +151,29 @@ do_append_entries([Member|Rest], MatchIndex, LogEntries, NextIndex, CurrentTerm,
       do_append_entries(Rest, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc)
   end.
 
+
+commit_if_can(MatchIndex, TotalMemberSize) ->
+  SortFunc = fun({MatchIndex1, _MatchCount1}, {MatchIndex2, _MatchCount2}) ->
+                MatchIndex1 > MatchIndex2
+             end,
+
+  IndexAndAckedCountMap = maps:fold(fun(_, MatchIndex0, Acc0) ->
+                                      Count0 = maps:get(MatchIndex0, Acc0, 0),
+                                      maps:put(MatchIndex0, Count0+1, Acc0)
+                                    end, #{}, MatchIndex),
+
+  IndexAndAckedCountList = maps:to_list(IndexAndAckedCountMap),
+  SortedMatchIndexDescOrderOfIndex = lists:sort(SortFunc, IndexAndAckedCountList),
+
+  {_, MaybeNewCommitIndex} =
+    lists:foldl(fun({Index, MatchCount}, {AckedMatchCount0, MaxMatchIndexAcc}) ->
+                  AckedMatchCount = AckedMatchCount0 + MatchCount,
+                  case raft_leader_election:has_quorum(TotalMemberSize, AckedMatchCount) of
+                    true -> {AckedMatchCount, max(Index, MaxMatchIndexAcc)};
+                    false -> {AckedMatchCount, MaxMatchIndexAcc}
+                  end
+                end, {0, 0}, SortedMatchIndexDescOrderOfIndex),
+  MaybeNewCommitIndex.
 
 my_name() ->
   raft_util:my_name().
