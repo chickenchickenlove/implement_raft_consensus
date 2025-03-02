@@ -23,9 +23,6 @@
                       leader     |
                       candidate.
 
-% unit : millisecond.
--define(INVALID_MATCH_INDEX, -1).
-
 %%%%%%%%%%%%%%%%%% NOTE %%%%%%%%%%%%%%%%%%%%%
 % Follower remains in follower state as long as it receives valid RPCs from a leader or candidate.
 
@@ -124,13 +121,14 @@ follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
     = case IsSuccess of
             true ->
               %% Since the leader has declared that the index up to leaderCommit is “already safely replicated”, we can assume that the follower can commit up to that index.
-              %%  However, it is possible that the follower has not physically received logs up to that index yet, meaning that the actual length of the follower's logs (MatchIndex0) may be less than leaderCommit.
-              %%  Therefore, the follower can't commit to an index it doesn't actually have, so it must eventually commit up to the value of min(leaderCommit, the actual last index).
+              %% However, it is possible that the follower has not physically received logs up to that index yet, meaning that the actual length of the follower's logs (MatchIndex0) may be less than leaderCommit.
+              %% Therefore, the follower can't commit to an index it doesn't actually have, so it must eventually commit up to the value of min(leaderCommit, the actual last index).
               {UpdatedLogEntries0, MatchIndex0} = raft_rpc_append_entries:do_concat_entries(Logs, LogsFromLeader, PrevLogIndex),
               CommitIndex1 = min(LeaderCommitIndex, MatchIndex0),
               {UpdatedLogEntries0, CommitIndex1, MatchIndex0};
             false ->
-              {Logs, CommitIndex0, ?INVALID_MATCH_INDEX}
+              EarliestIndexWithSameTerm = raft_rpc_append_entries:find_earliest_index_with_same_term(PrevLogTerm, PrevLogIndex, Logs),
+              {Logs, CommitIndex0, EarliestIndexWithSameTerm}
           end,
 
   ToPid = raft_util:get_node_pid(LeaderName),
@@ -409,9 +407,13 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
 
         {MatchIndex1, NextIndex1, MaybeNewCommitIndex, MaybeNewAppliedData};
       false ->
-        NewNextIndex = max(1, maps:get(NodeName, NextIndex0) - 1),
-        NextIndex2 = maps:put(NodeName, NewNextIndex, NextIndex0),
-        {MatchIndex0, NextIndex2, CommitIndex0, AppliedData0}
+        NewMatchIndexForPeer = max(0, NodeMatchIndex),
+        NewNextIndexForPeer = NodeMatchIndex + 1,
+
+        MatchIndexInCaseOfFalse = maps:put(NodeName, NewMatchIndexForPeer, MatchIndex0),
+        NextIndexInCaseOfFalse = maps:put(NodeName, NewNextIndexForPeer, MatchIndex0),
+
+        {MatchIndexInCaseOfFalse, NextIndexInCaseOfFalse, CommitIndex0, AppliedData0}
     end,
 
   Data1 = Data0#raft_state{next_index=NextIndex, match_index=MatchIndex, commit_index=CommitIndex, data=AppliedData},

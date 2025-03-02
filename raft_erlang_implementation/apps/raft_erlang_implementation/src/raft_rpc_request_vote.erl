@@ -38,9 +38,9 @@ vote_my_self(NewTerm, RaftState0) ->
 
 handle_request_vote_rpc(RaftState0, VoteArgs) ->
   #raft_state{voted_for=VotedFor,
-    current_term=CurrentTerm,
-    last_applied=FollowerLogLastIndex,
-    last_log_term=FollowerLogLastTerm} = RaftState0,
+              current_term=CurrentTerm,
+              last_applied=FollowerLogLastIndex,
+              last_log_term=FollowerLogLastTerm} = RaftState0,
 
   #vote_args{candidate_name=CandidateName} = VoteArgs,
 

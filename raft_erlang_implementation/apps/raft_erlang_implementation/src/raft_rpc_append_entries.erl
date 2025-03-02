@@ -8,6 +8,7 @@
 -export([new/6]).
 -export([new_ack/4]).
 -export([new_ack_fail/2]).
+-export([find_earliest_index_with_same_term/3]).
 -export([should_append_entries/3]).
 -export([do_concat_entries/3]).
 -export([do_append_entries/7]).
@@ -51,12 +52,30 @@ get(leader_commit_index, #append_entries{leader_commit_index=LeaderCommitIndex})
 get(_, _AppendEntries) ->
   undefined.
 
-
 should_append_entries(PrevLogIndexFromLeader, PrevLogTermFromLeader, LogsFromMe) ->
   PrevTermFromMe = get_log_term(PrevLogIndexFromLeader, LogsFromMe),
   (PrevLogIndexFromLeader =:= 0 orelse
     (PrevLogIndexFromLeader =< length(LogsFromMe) andalso PrevLogTermFromLeader =:= PrevTermFromMe)
   ).
+
+% 마지막으로 바뀐 녀석읖 찾아서 보내면 된다.
+% 매치된 것이 없으면 0으로 보내면 된다.
+find_earliest_index_with_same_term(_PrevTermFromLeader, PrevIndex, []) ->
+  max(PrevIndex-1, 0);
+find_earliest_index_with_same_term(PrevTermFromLeader, PrevIndex, LogEntries) ->
+  find_earliest_index_with_same_term_(PrevTermFromLeader, PrevIndex, LogEntries, unknown, false).
+
+find_earliest_index_with_same_term_(_PrevTermFromLeader, Index, _LogEntries, _PreviousStateOfComparingResult, true) ->
+  Index;
+find_earliest_index_with_same_term_(_PrevTermFromLeader, Index, [], _PreviousStateOfComparingResult, End) ->
+  Index;
+find_earliest_index_with_same_term_(PrevTermFromLeader, Index, [Head|Rest], PreviousStateOfComparingResult, End) ->
+  {CurIndexTerm, _} = Head,
+  CurrentComparingResult = raft_util:compare(CurIndexTerm, PrevTermFromLeader),
+  case {PreviousStateOfComparingResult, CurrentComparingResult} of
+    {equal, less} -> find_earliest_index_with_same_term_(PrevTermFromLeader, Index+1, [], done, true);
+    {_, _} -> find_earliest_index_with_same_term_(PrevTermFromLeader, Index-1, Rest, CurrentComparingResult, false)
+  end.
 
 get_log_term(0, _Logs) ->
   -1;

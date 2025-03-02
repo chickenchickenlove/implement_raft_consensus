@@ -683,6 +683,56 @@ commit_if_can3_test() ->
   %%% THEN
   ?assertEqual(0, CommitIndex).
 
+find_earliest_index_with_same_term1_test() ->
+  %%% GIVEN
+  PrevTermFromLeader = 5,
+  PrevIndex = 6,
+  LogEntries = [],
+
+  %%% WHEN
+  Result = raft_rpc_append_entries:find_earliest_index_with_same_term(PrevTermFromLeader, PrevIndex, LogEntries),
+
+  %%% THEN
+  ?assertEqual(5, Result).
+
+find_earliest_index_with_same_term2_test() ->
+  %%% GIVEN
+  PrevTermFromLeader = 5,
+  PrevIndex = 6,
+  LogEntries = [{5, "A6"}, {5, "A5"}, {5, "A4"}, {5, "A3"}, {5, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  Result = raft_rpc_append_entries:find_earliest_index_with_same_term(PrevTermFromLeader, PrevIndex, LogEntries),
+
+  %%% THEN
+  ?assertEqual(2, Result).
+
+find_earliest_index_with_same_term3_test() ->
+  %%% GIVEN
+  PrevTermFromLeader = 5,
+  PrevIndex = 6,
+  LogEntries = [{5, "A6"}, {5, "A5"}, {5, "A4"}, {5, "A3"}, {5, "A2"}, {5, "A1"}],
+
+  %%% WHEN
+  Result = raft_rpc_append_entries:find_earliest_index_with_same_term(PrevTermFromLeader, PrevIndex, LogEntries),
+
+  %%% THEN
+  ?assertEqual(0, Result).
+
+find_earliest_index_with_same_term4_test() ->
+  %%% GIVEN
+  PrevTermFromLeader = 5,
+  PrevIndex = 6,
+  LogEntries = [{5, "A6"}, {5, "A5"}, {5, "A4"}, {3, "A3"}, {2, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  Result = raft_rpc_append_entries:find_earliest_index_with_same_term(PrevTermFromLeader, PrevIndex, LogEntries),
+
+  %%% THEN
+  ?assertEqual(4, Result).
+
+
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%% TEST UTIL Function %%%

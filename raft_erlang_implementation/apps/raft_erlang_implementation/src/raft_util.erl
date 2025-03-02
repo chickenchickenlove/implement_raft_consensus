@@ -6,6 +6,7 @@
 -export([get_node_pid/1]).
 -export([my_name/0]).
 -export([node_name/1]).
+-export([compare/2]).
 
 clean_up_timer_time() ->
   catch persistent_term:erase(election_timeout).
@@ -34,4 +35,11 @@ node_name(Pid) ->
   case erlang:process_info(Pid, registered_name) of
     {registered_name, Name} -> Name;
     _ -> undefined
+  end.
+
+compare(A, B) ->
+  if
+    A > B -> grater;
+    A =:= B -> equal;
+    A < B -> less
   end.
