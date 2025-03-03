@@ -2,7 +2,7 @@
 
 -behavior(gen_statem).
 
-%%% Reference : https://raft.github.io/raft.pdf
+%%% Reference1 : https://raft.github.io/raft.pdf
 %%% Reference2 : https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf
 %%% pseudo code : https://github.com/ongardie/raft-pseudocode
 
@@ -277,6 +277,9 @@ candidate(cast, can_become_leader, Data0) ->
       io:format("[~p] the node ~p win the leader election. term is ~p.~n", [self(), my_name(), CurrentTerm]),
       #raft_state{next_index=NextIndex0, log_entries=Logs} = Data0,
       Length = length(Logs),
+      %% 5.3 Log Replication in Reference1.
+      %% When a leader first comes to power,
+      %% it initializes all nextIndex values to the index just after the last one in its log (11 in Figure 7).
       NextIndex = maps:fold(fun(MemberName, _NextIndex, Acc) ->
                               maps:put(MemberName, Length + 1, Acc)
                             end, #{}, NextIndex0),
@@ -402,10 +405,15 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
         #success_append_entries{match_index=NodeMatchIndex} = AppendEntriesResult,
         MatchIndex1 = maps:put(NodeName, NodeMatchIndex, MatchIndex0),
         NextIndex1 = maps:put(NodeName, NodeMatchIndex + 1, NextIndex0),
-        MaybeNewCommitIndex = raft_rpc_append_entries:commit_if_can(MatchIndex1, sets:size(Members)),
-
-        ReversedLogEntries = lists:reverse(LogEntries),
-        MaybeNewAppliedData = safe_get_entry_at_index(ReversedLogEntries, MaybeNewCommitIndex, AppliedData0),
+        {MaybeNewCommitIndex, MaybeNewAppliedData} =
+          case raft_rpc_append_entries:commit_if_can(MatchIndex1, sets:size(Members), CommitIndex0, LogEntries, CurrentTerm) of
+            {true, MaybeNewCommitIndex0} ->
+              ReversedLogEntries = lists:reverse(LogEntries),
+              MaybeNewAppliedData0 = safe_get_entry_at_index(ReversedLogEntries, MaybeNewCommitIndex0, AppliedData0),
+              {MaybeNewCommitIndex0, MaybeNewAppliedData0};
+            {false, _ShouldIgnoreCommitIndex} ->
+              {CommitIndex0, AppliedData0}
+          end,
 
         {MatchIndex1, NextIndex1, MaybeNewCommitIndex, MaybeNewAppliedData};
       false ->

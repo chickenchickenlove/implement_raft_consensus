@@ -670,44 +670,95 @@ do_append_entries5_test() ->
 
 
 commit_if_can1_test() ->
-  % MatchIndex, TotalMemberSize
-
   %%% GIVEN
   MatchIndex = #{'A' => 1, 'B' => 2, 'C' => 3, 'D' => 4},
   MemberSize = 4,
+  PreviousCommitIndex = 0,
+  LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
+  LeaderTerm = 10,
 
   %%% WHEN
-  CommitIndex = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize),
+  {IsSameWithCurrentTerm, MaybeNewCommitIndex} = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize, PreviousCommitIndex, LogEntries, LeaderTerm),
 
   %%% THEN
-  ?assertEqual(2, CommitIndex).
+  ?assertEqual(false, IsSameWithCurrentTerm),
+  ?assertEqual(PreviousCommitIndex, MaybeNewCommitIndex).
 
 commit_if_can2_test() ->
-  % MatchIndex, TotalMemberSize
-
   %%% GIVEN
-  MatchIndex = #{'A' => 1, 'B' => 4, 'C' => 4, 'D' => 4},
+  MatchIndex = #{'A' => 3, 'B' => 3, 'C' => 3, 'D' => 3},
   MemberSize = 4,
+  PreviousCommitIndex = 0,
+  LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
+  LeaderTerm = 10,
 
   %%% WHEN
-  CommitIndex = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize),
+  {IsSameWithCurrentTerm, MaybeNewCommitIndex} = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize, PreviousCommitIndex, LogEntries, LeaderTerm),
 
   %%% THEN
-  ?assertEqual(4, CommitIndex).
-
+  ?assertEqual(false, IsSameWithCurrentTerm),
+  ?assertEqual(PreviousCommitIndex, MaybeNewCommitIndex).
 
 commit_if_can3_test() ->
-  % MatchIndex, TotalMemberSize
-
   %%% GIVEN
-  MatchIndex = #{'A' => 0, 'B' => 0, 'C' => 0, 'D' => 0},
+  MatchIndex = #{'A' => 4, 'B' => 4, 'C' => 4, 'D' => 4},
   MemberSize = 4,
+  PreviousCommitIndex = 0,
+  LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
+  LeaderTerm = 10,
 
   %%% WHEN
-  CommitIndex = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize),
+  {IsSameWithCurrentTerm, MaybeNewCommitIndex} = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize, PreviousCommitIndex, LogEntries, LeaderTerm),
 
   %%% THEN
-  ?assertEqual(0, CommitIndex).
+  ?assertEqual(true, IsSameWithCurrentTerm),
+  ?assertEqual(4, MaybeNewCommitIndex).
+
+commit_if_can4_test() ->
+  %%% GIVEN
+  MatchIndex = #{'A' => 3, 'B' => 4, 'C' => 4, 'D' => 4},
+  MemberSize = 4,
+  PreviousCommitIndex = 0,
+  LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
+  LeaderTerm = 10,
+
+  %%% WHEN
+  {IsSameWithCurrentTerm, MaybeNewCommitIndex} = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize, PreviousCommitIndex, LogEntries, LeaderTerm),
+
+  %%% THEN
+  ?assertEqual(true, IsSameWithCurrentTerm),
+  ?assertEqual(4, MaybeNewCommitIndex).
+
+commit_if_can5_test() ->
+  %%% GIVEN
+  MatchIndex = #{'A' => 3, 'B' => 3, 'C' => 4, 'D' => 4},
+  MemberSize = 4,
+  PreviousCommitIndex = 0,
+  LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
+  LeaderTerm = 10,
+
+  %%% WHEN
+  {IsSameWithCurrentTerm, MaybeNewCommitIndex} = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize, PreviousCommitIndex, LogEntries, LeaderTerm),
+
+  %%% THEN
+  ?assertEqual(false, IsSameWithCurrentTerm),
+  ?assertEqual(0, MaybeNewCommitIndex).
+
+commit_if_can6_test() ->
+  %%% GIVEN
+  MatchIndex = #{'A' => 4, 'B' => 4, 'C' => 4, 'D' => 4},
+  MemberSize = 4,
+  PreviousCommitIndex = 0,
+  LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
+  LeaderTerm = 11,
+
+  %%% WHEN
+  {IsSameWithCurrentTerm, MaybeNewCommitIndex} = raft_rpc_append_entries:commit_if_can(MatchIndex, MemberSize, PreviousCommitIndex, LogEntries, LeaderTerm),
+
+  %%% THEN
+  ?assertEqual(false, IsSameWithCurrentTerm),
+  ?assertEqual(0, MaybeNewCommitIndex).
+
 
 find_earliest_index_with_same_term1_test() ->
   %%% GIVEN

@@ -3,7 +3,7 @@
 -include("rpc_record.hrl").
 
 %% API
--export([commit_if_can/2]).
+-export([commit_if_can/5]).
 -export([get/2]).
 -export([new/6]).
 -export([new_ack_fail_with_default/2]).
@@ -219,14 +219,14 @@ do_append_entries([Member|Rest], MatchIndex, LogEntries, NextIndex, CurrentTerm,
   end.
 
 
-commit_if_can(MatchIndex, TotalMemberSize) ->
+commit_if_can(MatchIndex, TotalMemberSize, PreviousCommitIndex, LogEntries, LeaderTerm) ->
   SortFunc = fun({MatchIndex1, _MatchCount1}, {MatchIndex2, _MatchCount2}) ->
-                MatchIndex1 > MatchIndex2
+    MatchIndex1 > MatchIndex2
              end,
 
   IndexAndAckedCountMap = maps:fold(fun(_, MatchIndex0, Acc0) ->
-                                      Count0 = maps:get(MatchIndex0, Acc0, 0),
-                                      maps:put(MatchIndex0, Count0+1, Acc0)
+    Count0 = maps:get(MatchIndex0, Acc0, 0),
+    maps:put(MatchIndex0, Count0+1, Acc0)
                                     end, #{}, MatchIndex),
 
   IndexAndAckedCountList = maps:to_list(IndexAndAckedCountMap),
@@ -240,7 +240,28 @@ commit_if_can(MatchIndex, TotalMemberSize) ->
                     false -> {AckedMatchCount, MaxMatchIndexAcc}
                   end
                 end, {0, 0}, SortedMatchIndexDescOrderOfIndex),
-  MaybeNewCommitIndex.
+
+  TermAtMaybeNewCommitIndex =
+    case MaybeNewCommitIndex of
+      0 -> PreviousCommitIndex;
+      MaybeNewCommitIndex ->
+        {FoundTerm, _Data}  = find_log(LogEntries, length(LogEntries), MaybeNewCommitIndex),
+        FoundTerm
+    end,
+
+  IsSameWithCurrentTerm = TermAtMaybeNewCommitIndex =:= LeaderTerm,
+
+  case IsSameWithCurrentTerm of
+    true -> {IsSameWithCurrentTerm, MaybeNewCommitIndex};
+    false -> {IsSameWithCurrentTerm, PreviousCommitIndex}
+  end.
+
+find_log([], _CurrentIndex, _Target) ->
+  ok;
+find_log([Head|_Tail], CurrentIndex, Target) when CurrentIndex =:= Target ->
+  Head;
+find_log([_Head|Tail], CurrentIndex, Target) ->
+  find_log(Tail, CurrentIndex - 1, Target).
 
 my_name() ->
   raft_util:my_name().
