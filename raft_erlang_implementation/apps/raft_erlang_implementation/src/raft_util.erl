@@ -21,10 +21,6 @@ get_timer_time() ->
     150
   end.
 
-get_election_timeout_divided_by(DividedNumber) ->
-  ElectionTimeout = get_timer_time(),
-  ElectionTimeout div DividedNumber.
-
 get_node_pid(NodeName) ->
   whereis(NodeName).
 
