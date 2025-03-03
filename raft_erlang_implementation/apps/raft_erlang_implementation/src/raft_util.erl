@@ -39,7 +39,7 @@ node_name(Pid) ->
 
 compare(A, B) ->
   if
-    A > B -> grater;
+    A > B -> greater;
     A =:= B -> equal;
     A < B -> less
   end.

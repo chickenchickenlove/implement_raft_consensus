@@ -19,9 +19,14 @@
                     candidate_last_log_index :: integer(),
                     candidate_last_log_term :: integer()}).
 
+-record(success_append_entries, {match_index :: integer()}).
+-record(fail_append_entries, {conflict_term :: integer(),
+                              first_index_with_conflict_term :: integer()}).
+
 -record(ack_append_entries, {node_name :: atom(),
                              node_term :: integer(),
                              success :: integer(),
+                             result :: #success_append_entries{} | #fail_append_entries{},
                              match_index :: integer()}).
 
 -record(raft_state, {

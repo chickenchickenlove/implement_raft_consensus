@@ -55,6 +55,6 @@ can_vote(VotedFor, FollowerTerm, FollowerLastLogTerm, FollowerLastLogIndex, Vote
   IsEqualTerm = FollowerTerm =:= CandidateTerm,
   NotYetVotedOrVotedSamePeer = VotedFor =:= undefined orelse VotedFor =:= CandidateName,
   CandidateHasLatestLogTerm = ((CandidateLastLogTerm > FollowerLastLogTerm) orelse
-    (CandidateLastLogTerm =:= FollowerLastLogTerm andalso CandidateLastLogIndex >= FollowerLastLogIndex)
+                               (CandidateLastLogTerm =:= FollowerLastLogTerm andalso CandidateLastLogIndex >= FollowerLastLogIndex)
   ),
   IsEqualTerm andalso NotYetVotedOrVotedSamePeer andalso CandidateHasLatestLogTerm.

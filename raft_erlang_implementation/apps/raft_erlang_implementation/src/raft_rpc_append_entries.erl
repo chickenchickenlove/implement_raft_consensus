@@ -6,9 +6,12 @@
 -export([commit_if_can/2]).
 -export([get/2]).
 -export([new/6]).
--export([new_ack/4]).
--export([new_ack_fail/2]).
+-export([new_ack_fail_with_default/2]).
+-export([new_ack_fail/4]).
+-export([new_ack_success/3]).
 -export([find_earliest_index_with_same_term/3]).
+-export([find_earliest_index_at_conflict_term/2]).
+-export([find_last_index_with_same_term/2]).
 -export([should_append_entries/3]).
 -export([do_concat_entries/3]).
 -export([do_append_entries/7]).
@@ -24,17 +27,25 @@ new(Term, LeaderName, PrevLogIndex, PrevLogTerm, Entries, LeaderCommit) ->
                   entries = Entries,
                   leader_commit_index = LeaderCommit}.
 
-new_ack_fail(NodeName, NodeTerm) ->
-  % -1 is invalid value.
-  % So, Caller should ignore this value if caller witness this.
-  new_ack(NodeName, NodeTerm, false, ?INVALID_MATCH_INDEX).
+new_ack_fail_with_default(NodeName, NodeTerm) ->
+  AppendResult = #fail_append_entries{conflict_term=0,
+                                      first_index_with_conflict_term=0},
+  new_ack(NodeName, NodeTerm, false, AppendResult).
 
+new_ack_fail(NodeName, NodeTerm, ConflictTerm, FirstIndexWithConflictTerm) ->
+  AppendResult = #fail_append_entries{conflict_term=ConflictTerm,
+                                      first_index_with_conflict_term=FirstIndexWithConflictTerm},
+  new_ack(NodeName, NodeTerm, false, AppendResult).
 
-new_ack(NodeName, NodeTerm, Success, MatchIndex) ->
+new_ack_success(NodeName, NodeTerm, MatchIndex) ->
+  AppendResult = #success_append_entries{match_index=MatchIndex},
+  new_ack(NodeName, NodeTerm, true, AppendResult).
+
+new_ack(NodeName, NodeTerm, Success, Result) ->
   #ack_append_entries{node_name=NodeName,
                       node_term=NodeTerm,
                       success=Success,
-                      match_index=MatchIndex}.
+                      result=Result}.
 
 
 get(term, #append_entries{term=Term}) ->
@@ -58,8 +69,45 @@ should_append_entries(PrevLogIndexFromLeader, PrevLogTermFromLeader, LogsFromMe)
     (PrevLogIndexFromLeader =< length(LogsFromMe) andalso PrevLogTermFromLeader =:= PrevTermFromMe)
   ).
 
-% 마지막으로 바뀐 녀석읖 찾아서 보내면 된다.
-% 매치된 것이 없으면 0으로 보내면 된다.
+find_earliest_index_at_conflict_term(0, _LogsEntriesFromMe) ->
+  error({invalid_state, "It cannot be reached at here. because the function `should_append_entries` already filtered it."});
+find_earliest_index_at_conflict_term(PrevIndex, LogsEntriesFromMe) when PrevIndex > length(LogsEntriesFromMe) ->
+  case LogsEntriesFromMe of
+    [] -> {0, 0};
+    LogsEntriesFromMe ->
+      [Head|_Rest] = LogsEntriesFromMe,
+      {ConflictTerm, _Data} = Head,
+      FoundFirstIndexWithConflictTerm = find_earliest_index_with_same_term_(ConflictTerm, length(LogsEntriesFromMe), LogsEntriesFromMe, unknown, false),
+      {ConflictTerm, FoundFirstIndexWithConflictTerm}
+  end;
+find_earliest_index_at_conflict_term(PrevIndex, LogsEntriesFromMe) ->
+  ReversedLogs = lists:reverse(LogsEntriesFromMe),
+  ReversedSubList = lists:sublist(ReversedLogs, PrevIndex),
+  SubListFromMe = lists:reverse(ReversedSubList),
+
+  [Head|_Rest] = SubListFromMe,
+  {ConflictTerm, _Data} = Head,
+  FoundFirstIndexWithConflictTerm = find_earliest_index_with_same_term_(ConflictTerm, PrevIndex, SubListFromMe, unknown, false),
+  {ConflictTerm, FoundFirstIndexWithConflictTerm}.
+
+
+find_last_index_with_same_term(_ConflictTerm, []) ->
+  {false, ?INVALID_MATCH_INDEX};
+find_last_index_with_same_term(ConflictTerm, LogEntries) ->
+  find_last_index_with_same_term_(ConflictTerm, length(LogEntries), LogEntries, unknown, false).
+
+find_last_index_with_same_term_(_ConflictTerm, Index, _LogEntries, done, true) ->
+  {true, Index};
+find_last_index_with_same_term_(_ConflictTerm, Index, [], _PreviousStateOfComparingResult, _End) ->
+  {false, ?INVALID_MATCH_INDEX};
+find_last_index_with_same_term_(ConflictTerm, Index, [Head|Rest], PreviousStateOfComparingResult, _End) ->
+  {CurIndexTerm, _} = Head,
+  CurrentComparingResult = raft_util:compare(CurIndexTerm, ConflictTerm),
+  case {PreviousStateOfComparingResult, CurrentComparingResult} of
+    {_, equal} -> find_last_index_with_same_term_(ConflictTerm, Index, [], done, true);
+    {_, _} -> find_last_index_with_same_term_(ConflictTerm, Index-1, Rest, CurrentComparingResult, false)
+  end.
+
 find_earliest_index_with_same_term(_PrevTermFromLeader, PrevIndex, []) ->
   max(PrevIndex-1, 0);
 find_earliest_index_with_same_term(PrevTermFromLeader, PrevIndex, LogEntries) ->
@@ -67,9 +115,9 @@ find_earliest_index_with_same_term(PrevTermFromLeader, PrevIndex, LogEntries) ->
 
 find_earliest_index_with_same_term_(_PrevTermFromLeader, Index, _LogEntries, _PreviousStateOfComparingResult, true) ->
   Index;
-find_earliest_index_with_same_term_(_PrevTermFromLeader, Index, [], _PreviousStateOfComparingResult, End) ->
+find_earliest_index_with_same_term_(_PrevTermFromLeader, Index, [], _PreviousStateOfComparingResult, _End) ->
   Index;
-find_earliest_index_with_same_term_(PrevTermFromLeader, Index, [Head|Rest], PreviousStateOfComparingResult, End) ->
+find_earliest_index_with_same_term_(PrevTermFromLeader, Index, [Head|Rest], PreviousStateOfComparingResult, _End) ->
   {CurIndexTerm, _} = Head,
   CurrentComparingResult = raft_util:compare(CurIndexTerm, PrevTermFromLeader),
   case {PreviousStateOfComparingResult, CurrentComparingResult} of

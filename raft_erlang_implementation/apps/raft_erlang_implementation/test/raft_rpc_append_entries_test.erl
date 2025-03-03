@@ -412,6 +412,32 @@ concat_entries27_test() ->
   ?assertEqual(5, MatchIndex).
 
 
+concat_entries28_test() ->
+  %% GIVEN
+  LogsIHave = [{1, "A1"}, {1, "A2"}],
+  LogsFromLeader = [],
+  PrevIndexFromLeader = 1,
+
+  %% WHEN
+  {UpdatedLogs, MatchIndex} = raft_rpc_append_entries:concat_entries(LogsIHave, LogsFromLeader, PrevIndexFromLeader),
+
+  %% THEN
+  ?assertEqual([{1, "A1"}], UpdatedLogs),
+  ?assertEqual(1, MatchIndex).
+
+concat_entries29_test() ->
+  %% GIVEN
+  LogsIHave = [{1, "A1"}, {1, "A2"}, {1, "A3"}, {1, "A4"}, {1, "A5"}, {1, "A6"}, {1, "A7"}, {1, "A8"}, {1, "A9"}, {1, "A10"}],
+  LogsFromLeader = [],
+  PrevIndexFromLeader = 1,
+
+  %% WHEN
+  {UpdatedLogs, MatchIndex} = raft_rpc_append_entries:concat_entries(LogsIHave, LogsFromLeader, PrevIndexFromLeader),
+
+  %% THEN
+  ?assertEqual([{1, "A1"}], UpdatedLogs),
+  ?assertEqual(1, MatchIndex).
+
 
 do_append_entries1_test() ->
   % If RpcDueTime has been expired and there are no logs to send to, it send append_entry rpc to each member.
@@ -731,6 +757,181 @@ find_earliest_index_with_same_term4_test() ->
   %%% THEN
   ?assertEqual(4, Result).
 
+
+find_earliest_index_at_conflict1_test() ->
+  %%% GIVEN
+  PrevIndexFromLeader = 0,
+  LogEntriesFromMe = [],
+
+  %%% WHEN + THEN
+  ExpectedError = {invalid_state, "It cannot be reached at here. because the function `should_append_entries` already filtered it."},
+  ?assertError(ExpectedError, raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevIndexFromLeader, LogEntriesFromMe)).
+
+find_earliest_index_at_conflict2_test() ->
+  %%% GIVEN
+  PrevIndexFromLeader = 0,
+  LogEntriesFromMe = [],
+
+  %%% WHEN + THEN
+  ExpectedError = {invalid_state, "It cannot be reached at here. because the function `should_append_entries` already filtered it."},
+  ?assertError(ExpectedError, raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevIndexFromLeader, LogEntriesFromMe)).
+
+find_earliest_index_at_conflict3_test() ->
+  %%% GIVEN
+  PrevIndexFromLeader = 0,
+  LogEntriesFromMe = [{1, "A1"}, {2, "A2"}],
+
+  %%% WHEN + THEN
+  ExpectedError = {invalid_state, "It cannot be reached at here. because the function `should_append_entries` already filtered it."},
+  ?assertError(ExpectedError, raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevIndexFromLeader, LogEntriesFromMe)).
+
+
+find_earliest_index_at_conflict4_test() ->
+  %%% GIVEN
+  PrevIndexFromLeader = 2,
+  LogEntriesFromMe = [{3, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevIndexFromLeader, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(3, ConflictTerm),
+  ?assertEqual(2, FoundFirstIndexWithConflictTerm).
+
+find_earliest_index_at_conflict5_test() ->
+  %%% GIVEN
+  PrevIndexFromLeader = 3,
+  LogEntriesFromMe = [{3, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevIndexFromLeader, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(3, ConflictTerm),
+  ?assertEqual(2, FoundFirstIndexWithConflictTerm).
+
+find_earliest_index_at_conflict6_test() ->
+  %%% GIVEN
+  PrevIndexFromLeader = 10,
+  LogEntriesFromMe = [{3, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevIndexFromLeader, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(3, ConflictTerm),
+  ?assertEqual(2, FoundFirstIndexWithConflictTerm).
+
+
+find_earliest_index_at_conflict7_test() ->
+  %%% GIVEN
+  PrevIndexFromLeader = 10,
+  LogEntriesFromMe = [],
+
+  %%% WHEN
+  {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevIndexFromLeader, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(0, ConflictTerm),
+  ?assertEqual(0, FoundFirstIndexWithConflictTerm).
+
+find_earliest_index_at_conflict8_test() ->
+  %%% GIVEN
+  PrevIndexFromLeader = 10,
+  LogEntriesFromMe = [{3, "A11"}, {3, "A10"}, {3, "A9"}, {3, "A8"},
+                      {3, "A7"}, {2, "A6"}, {2, "A5"}, {2, "A4"},
+                      {1, "A3"}, {1, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevIndexFromLeader, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(3, ConflictTerm),
+  ?assertEqual(7, FoundFirstIndexWithConflictTerm).
+
+find_earliest_index_at_conflict9_test() ->
+  %%% GIVEN
+  PrevIndexFromLeader = 6,
+  LogEntriesFromMe = [{3, "A11"}, {3, "A10"}, {3, "A9"}, {3, "A8"},
+    {3, "A7"}, {2, "A6"}, {2, "A5"}, {2, "A4"},
+    {1, "A3"}, {1, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevIndexFromLeader, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(2, ConflictTerm),
+  ?assertEqual(4, FoundFirstIndexWithConflictTerm).
+
+find_last_index_with_same_term1_test() ->
+  %%% GIVEN
+  ConflictTerm = 3,
+  LogEntriesFromMe = [{3, "A11"}, {3, "A10"}, {3, "A9"}, {3, "A8"},
+                      {3, "A7"}, {2, "A6"}, {2, "A5"}, {2, "A4"},
+                      {1, "A3"}, {1, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  {IsFoundConflictTermIndex, FoundIndex} = raft_rpc_append_entries:find_last_index_with_same_term(ConflictTerm, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(true, IsFoundConflictTermIndex),
+  ?assertEqual(11, FoundIndex).
+
+find_last_index_with_same_term2_test() ->
+  %%% GIVEN
+  ConflictTerm = 3,
+  LogEntriesFromMe = [{6, "A10"}, {6, "A9"}, {6, "A8"}, {5, "A7"},
+                      {5, "A6"}, {4, "A5"}, {4, "A4"}, {1, "A3"},
+                      {1, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  {IsFoundConflictTermIndex, FoundIndex} = raft_rpc_append_entries:find_last_index_with_same_term(ConflictTerm, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(false, IsFoundConflictTermIndex),
+  ?assertEqual(-1, FoundIndex).
+
+
+find_last_index_with_same_term3_test() ->
+  %%% GIVEN
+  ConflictTerm = 2,
+  LogEntriesFromMe = [{6, "A10"}, {6, "A9"}, {6, "A8"}, {5, "A7"},
+                      {5, "A6"}, {4, "A5"}, {4, "A4"}, {1, "A3"},
+                      {1, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  {IsFoundConflictTermIndex, FoundIndex} = raft_rpc_append_entries:find_last_index_with_same_term(ConflictTerm, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(false, IsFoundConflictTermIndex),
+  ?assertEqual(-1, FoundIndex).
+
+
+find_last_index_with_same_term4_test() ->
+  %%% GIVEN
+  ConflictTerm = 1,
+  LogEntriesFromMe = [{6, "A10"}, {6, "A9"}, {6, "A8"}, {5, "A7"},
+                      {5, "A6"}, {4, "A5"}, {4, "A4"}, {1, "A3"},
+                      {1, "A2"}, {1, "A1"}],
+
+  %%% WHEN
+  {IsFoundConflictTermIndex, FoundIndex} = raft_rpc_append_entries:find_last_index_with_same_term(ConflictTerm, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(true, IsFoundConflictTermIndex),
+  ?assertEqual(3, FoundIndex).
+
+find_last_index_with_same_term5_test() ->
+  %%% GIVEN
+  ConflictTerm = 10,
+  LogEntriesFromMe = [],
+
+  %%% WHEN
+  {IsFoundConflictTermIndex, FoundIndex} = raft_rpc_append_entries:find_last_index_with_same_term(ConflictTerm, LogEntriesFromMe),
+
+  %%% THEN
+  ?assertEqual(false, IsFoundConflictTermIndex),
+  ?assertEqual(-1, FoundIndex).
 
 
 

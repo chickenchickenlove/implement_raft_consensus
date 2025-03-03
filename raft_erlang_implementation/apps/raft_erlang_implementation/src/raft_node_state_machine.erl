@@ -94,7 +94,7 @@ follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm}=AppendEn
   Data1 = step_down(AppendEntriesTerm, Data0),
   {keep_state, Data1, {next_event, cast, {append_entries, AppendEntriesRpc}}};
 
-follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
+follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=_AppendEntriesRpc},
          #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm > AppendEntriesTerm ->
   io:format("[~p] Node ~p got append_entries2. ~n", [self(), my_name()]),
   AckAppendEntriesMsg = {my_name(), CurrenTerm, false, -1},
@@ -117,7 +117,7 @@ follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
   io:format("[~p] Node ~p got append_entries3 from ~p. ~n", [self(), my_name(), LeaderName]),
   NewLeader = LeaderName,
   IsSuccess = raft_rpc_append_entries:should_append_entries(PrevLogIndex, PrevLogTerm, Logs),
-  {UpdatedLogEntries, CommitIndex, MatchIndex}
+  {UpdatedLogEntries, CommitIndex, AckAppendEntries}
     = case IsSuccess of
             true ->
               %% Since the leader has declared that the index up to leaderCommit is “already safely replicated”, we can assume that the follower can commit up to that index.
@@ -125,19 +125,20 @@ follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
               %% Therefore, the follower can't commit to an index it doesn't actually have, so it must eventually commit up to the value of min(leaderCommit, the actual last index).
               {UpdatedLogEntries0, MatchIndex0} = raft_rpc_append_entries:do_concat_entries(Logs, LogsFromLeader, PrevLogIndex),
               CommitIndex1 = min(LeaderCommitIndex, MatchIndex0),
-              {UpdatedLogEntries0, CommitIndex1, MatchIndex0};
+              SuccessAppendEntries = raft_rpc_append_entries:new_ack_success(my_name(), CurrentTerm, MatchIndex0),
+              {UpdatedLogEntries0, CommitIndex1, SuccessAppendEntries};
             false ->
-              EarliestIndexWithSameTerm = raft_rpc_append_entries:find_earliest_index_with_same_term(PrevLogTerm, PrevLogIndex, Logs),
-              {Logs, CommitIndex0, EarliestIndexWithSameTerm}
+              {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevLogIndex, Logs),
+              FailAppendEntries = raft_rpc_append_entries:new_ack_fail(my_name(), CurrentTerm, ConflictTerm, FoundFirstIndexWithConflictTerm),
+              {Logs, CommitIndex0, FailAppendEntries}
           end,
 
   ToPid = raft_util:get_node_pid(LeaderName),
-  AckAppendEntries = raft_rpc_append_entries:new_ack(my_name(), CurrentTerm, true, MatchIndex),
   Msg = {ack_append_entries, AckAppendEntries},
   gen_statem:cast(ToPid, Msg),
 
   Data2 = Data1#raft_state{leader=NewLeader, commit_index=CommitIndex,
-                        log_entries=UpdatedLogEntries, data=AppliedData},
+                           log_entries=UpdatedLogEntries, data=AppliedData},
   {keep_state, Data2};
 
 follower(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
@@ -303,15 +304,15 @@ candidate(cast, election_timeout, Data) ->
 % If the leader’s term (included in its RPC) is at least as large as the candidate’s current term,
 % then the candidate recognizes the leader as legitimate and returns to follower state.
 % If the term in the RPC is smaller than the candidate’s current term, then the candidate rejects the RPC and continues in candidate state.
-candidate(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
+candidate(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=_LeaderName}=AppendEntriesRpc},
          #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm < AppendEntriesTerm ->
   Data1 = step_down(AppendEntriesTerm, Data0),
   {next_state, follower, Data1, {next_event, cast, {append_entries, AppendEntriesRpc}}};
-candidate(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
+candidate(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=_AppendEntriesRpc},
           #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm > AppendEntriesTerm ->
   io:format("[~p] Node ~p got append_entries. ~n", [self(), my_name()]),
 
-  AckAppendEntries = raft_rpc_append_entries:new_ack_fail(my_name(), CurrenTerm),
+  AckAppendEntries = raft_rpc_append_entries:new_ack_fail_with_default(my_name(), CurrenTerm),
   Msg = {ack_append_entries, AckAppendEntries},
   ToPid = raft_util:get_node_pid(LeaderName),
   gen_statem:cast(ToPid, Msg),
@@ -374,12 +375,12 @@ leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm}=AppendEntr
   Data1 = step_down(AppendEntriesTerm, Data0),
   {next_state, follower, Data1, {next_event, cast, {append_entries, AppendEntriesRpc}}};
 
-leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=AppendEntriesRpc},
+leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=_AppendEntriesRpc},
        #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm > AppendEntriesTerm ->
   io:format("[~p] Node ~p got append_entries. ~n", [self(), my_name()]),
 
   ToPid = raft_util:get_node_pid(LeaderName),
-  AckAppendEntries = raft_rpc_append_entries:new_ack_fail(my_name(), CurrenTerm),
+  AckAppendEntries = raft_rpc_append_entries:new_ack_fail_with_default(my_name(), CurrenTerm),
   Msg = {ack_append_entries, AckAppendEntries},
   gen_statem:cast(ToPid, Msg),
   {keep_state, Data0};
@@ -391,13 +392,14 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
 leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckAppendEntries},
        #raft_state{current_term=CurrentTerm}=Data0) when CurrentTerm =:= NodeTerm ->
   io:format("[~p] Node ~p got ack_append_entries. ~n", [self(), my_name()]),
-  #ack_append_entries{success=Success, match_index=NodeMatchIndex, node_name=NodeName} = AckAppendEntries,
+  #ack_append_entries{success=Success, node_name=NodeName, result=AppendEntriesResult} = AckAppendEntries,
   #raft_state{match_index=MatchIndex0, next_index=NextIndex0, commit_index=CommitIndex0,
-           members=Members, log_entries=LogEntries, data=AppliedData0} = Data0,
+              members=Members, log_entries=LogEntries, data=AppliedData0} = Data0,
 
   {MatchIndex, NextIndex, CommitIndex, AppliedData} =
     case Success of
       true ->
+        #success_append_entries{match_index=NodeMatchIndex} = AppendEntriesResult,
         MatchIndex1 = maps:put(NodeName, NodeMatchIndex, MatchIndex0),
         NextIndex1 = maps:put(NodeName, NodeMatchIndex + 1, NextIndex0),
         MaybeNewCommitIndex = raft_rpc_append_entries:commit_if_can(MatchIndex1, sets:size(Members)),
@@ -407,8 +409,23 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
 
         {MatchIndex1, NextIndex1, MaybeNewCommitIndex, MaybeNewAppliedData};
       false ->
-        NewMatchIndexForPeer = max(0, NodeMatchIndex),
-        NewNextIndexForPeer = NodeMatchIndex + 1,
+        #fail_append_entries{conflict_term=ConflictTerm, first_index_with_conflict_term=FirstIndexConflictTerm} = AppendEntriesResult,
+        {NewNextIndexForPeer, NewMatchIndexForPeer} =
+          case raft_rpc_append_entries:find_last_index_with_same_term(ConflictTerm, LogEntries) of
+            % If there is entry that is same with conflict term in leader's entries,
+            % Assume that FoundIndex is matched state, because the RAFT algorithm consider both `term` and `index`.
+            % So, If two logs in different node has same index and same term, it is considered same entry.
+            {true, FoundIndex} ->
+              NewNextIndexForPeer1 = FoundIndex + 1,
+              NewMatchIndexForPeer1 = FoundIndex,
+              {NewNextIndexForPeer1, NewMatchIndexForPeer1};
+            % If there is no entry that is same with conflict term in leader's entries,
+            % Leader should use FirstIndexConflictTerm from follower.
+            {false, _FoundIndex} ->
+              NewNextIndexForPeer2 = FirstIndexConflictTerm,
+              NewMatchIndexForPeer2 = max(0, FirstIndexConflictTerm - 1),
+              {NewNextIndexForPeer2, NewMatchIndexForPeer2}
+          end,
 
         MatchIndexInCaseOfFalse = maps:put(NodeName, NewMatchIndexForPeer, MatchIndex0),
         NextIndexInCaseOfFalse = maps:put(NodeName, NewNextIndexForPeer, MatchIndex0),
@@ -456,12 +473,12 @@ leader({call, From}, {new_entry, Entry}, Data0) ->
 leader(EventType, EventContent, Data) ->
   handle_event(EventType, EventContent, leader, Data).
 
-handle_event({call, From}, get_timer, State, Data) ->
+handle_event({call, From}, get_timer, _State, Data) ->
   #raft_state{election_timeout_timer=Timer}=Data,
   {keep_state, Data, [{reply, From, Timer}]};
 handle_event({call, From}, get_state, State, Data) ->
   {keep_state, Data, [{reply, From, State}]};
-handle_event({call, From}, get_log_entries, State, Data) ->
+handle_event({call, From}, get_log_entries, _State, Data) ->
   #raft_state{log_entries=LogEntries} = Data,
   {keep_state, Data, [{reply, From, LogEntries}]};
 
@@ -478,7 +495,7 @@ handle_event({call, From}, get_voted_for, _State, Data) ->
   #raft_state{voted_for=VotedFor} = Data,
   {keep_state, Data, [{reply, From, VotedFor}]};
 
-handle_event(EventType, EventCount, State, Data) ->
+handle_event(_EventType, _EventCount, _State, Data) ->
   %% Ignore all other events.
   {keep_state, Data}.
 
