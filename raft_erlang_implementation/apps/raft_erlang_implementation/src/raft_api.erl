@@ -1,6 +1,8 @@
 -module(raft_api).
 
 %% API
+-export([add_members/2]).
+-export([remove_members/2]).
 -export([add_entry/2]).
 -export([get_timer/1]).
 -export([get_voted_for/1]).
@@ -9,6 +11,23 @@
 -export([get_current_term/1]).
 -export([get_log_entries/1]).
 
+-spec add_members(NodeNameOrPid, NewMembers) -> ok when
+  NodeNameOrPid :: pid() | atom(),
+  NewMembers :: list(pid).
+add_members(NodeName, NewMembers) when is_atom(NodeName) ->
+  Pid = whereis(NodeName),
+  gen_statem:call(Pid, {new_entry, {add_members, NewMembers}});
+add_members(Pid, NewMembers)  ->
+  gen_statem:call(Pid, {new_entry, {add_members, NewMembers}}).
+
+-spec remove_members(NodeNameOrPid, RemovedMembers) -> ok when
+  NodeNameOrPid :: pid() | atom(),
+  RemovedMembers :: list(pid).
+remove_members(NodeName, RemovedMembers) when is_atom(NodeName) ->
+  Pid = whereis(NodeName),
+  gen_statem:call(Pid, {new_entry, {remove_members, RemovedMembers}});
+remove_members(Pid, RemovedMembers)  ->
+  gen_statem:call(Pid, {new_entry, {remove_members, RemovedMembers}}).
 
 add_entry(NodeName, Entry) when is_atom(NodeName) ->
   Pid = whereis(NodeName),

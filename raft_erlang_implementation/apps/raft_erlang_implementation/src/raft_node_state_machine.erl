@@ -139,7 +139,11 @@ follower(cast, {append_entries, AppendEntriesRpc}, Data0)  ->
 
   Data2 = Data1#raft_state{leader=NewLeader, commit_index=CommitIndex,
                            log_entries=UpdatedLogEntries, data=AppliedData},
-  {keep_state, Data2};
+
+  ShouldHandleEntries = raft_util:get_entry(CommitIndex0, CommitIndex, UpdatedLogEntries),
+  Data3 = raft_cluster_change:handle_cluster_change_if_needed(ShouldHandleEntries, Data2),
+
+  {keep_state, Data3};
 
 follower(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
     #raft_state{current_term=CurrentTerm}=Data0) when CurrentTerm < NodeTerm ->
@@ -442,7 +446,10 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
     end,
 
   Data1 = Data0#raft_state{next_index=NextIndex, match_index=MatchIndex, commit_index=CommitIndex, data=AppliedData},
-  {keep_state, Data1};
+
+  ShouldHandleEntries = raft_util:get_entry(CommitIndex0, CommitIndex, lists:reverse(LogEntries)),
+  Data2 = raft_cluster_change:handle_cluster_change_if_needed(ShouldHandleEntries, Data1),
+  {keep_state, Data2};
 
 leader(cast, {ack_append_entries, _}, Data0) ->
   % Ignore

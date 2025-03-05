@@ -2,11 +2,11 @@
 
 %% API
 -export([set_timer_time/1, get_timer_time/0, clean_up_timer_time/0]).
--export([get_election_timeout_divided_by/1]).
 -export([get_node_pid/1]).
 -export([my_name/0]).
 -export([node_name/1]).
 -export([compare/2]).
+-export([get_entry/3]).
 
 clean_up_timer_time() ->
   catch persistent_term:erase(election_timeout).
@@ -39,3 +39,16 @@ compare(A, B) ->
     A =:= B -> equal;
     A < B -> less
   end.
+
+% Assume that [1,2,3,4,5,6, ....]
+get_entry(0, _End, _Entries) ->
+  [];
+
+get_entry(_Start, 0, _Entries) ->
+  [];
+
+get_entry(_Start, _End, []) ->
+  [];
+
+get_entry(Start, End, Entries) ->
+  lists:sublist(Entries, Start, End).
