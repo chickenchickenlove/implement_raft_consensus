@@ -2,22 +2,33 @@
 
 -include("rpc_record.hrl").
 
+-export([can_vote/5]).
+-export([has_quorum/2]).
+-export([handle_request_vote_rpc/2]).
+-export([new_ack/3]).
+-export([new_request_vote/4]).
+-export([new_vote_arguments/4]).
+-export([request_vote/2]).
 -export([vote/3]).
 -export([vote_granted/3]).
 -export([vote_my_self/2]).
--export([new_request_vote/4]).
--export([new_ack/3]).
--export([request_vote/2]).
--export([handle_request_vote_rpc/2]).
 
-request_vote(NodeName, VoteArgs) when is_atom(NodeName) ->
-  Pid = whereis(NodeName),
-  % Should be cast. otherwise, deadlock occur.
-  % (Candidate A wait ack_voted from B, B wait ack_voted_from A)
-  gen_statem:cast(Pid, {request_vote, VoteArgs});
-request_vote(Pid, VoteArgs) when is_pid(Pid)->
-  gen_statem:cast(Pid, {request_vote, VoteArgs}).
 
+-export_type([vote_arguments/0]).
+
+% Candidate's Term.
+-type candidate_term() :: integer().
+
+% Candidate requesting vote.
+-type candidate_id() :: atom().
+
+% Index of candidate's last log entry
+-type last_log_index() :: integer().
+
+% Term of candidate's last log entry
+-type last_log_term() :: integer().
+
+-type vote_arguments() :: {candidate_term(), candidate_id(), last_log_index(), last_log_term()}.
 
 new_request_vote(NodeName, NodeTerm, LastLogIndex, LastLogTerm) ->
   #vote_args{candidate_term=NodeTerm,
@@ -27,6 +38,49 @@ new_request_vote(NodeName, NodeTerm, LastLogIndex, LastLogTerm) ->
 
 new_ack(CurrentTerm, VoteGranted, MyName) ->
   {ack_request_voted, MyName, CurrentTerm, VoteGranted}.
+
+new_vote_arguments(NodeName, NodeTerm, LastLogIndex, LastLogTerm) ->
+  #vote_args{candidate_name=NodeName,
+             candidate_term=NodeTerm,
+             candidate_last_log_index=LastLogIndex,
+             candidate_last_log_term=LastLogTerm}.
+
+can_vote(VotedFor, FollowerTerm, FollowerLastLogTerm, FollowerLastLogIndex, VotedArgs) ->
+  #vote_args{candidate_name=CandidateName,
+             candidate_term=CandidateTerm,
+             candidate_last_log_term=CandidateLastLogTerm,
+             candidate_last_log_index=CandidateLastLogIndex} = VotedArgs,
+
+  IsEqualTerm = FollowerTerm =:= CandidateTerm,
+  NotYetVotedOrVotedSamePeer = VotedFor =:= undefined orelse VotedFor =:= CandidateName,
+  CandidateHasLatestLogTerm = ((CandidateLastLogTerm > FollowerLastLogTerm) orelse
+    (CandidateLastLogTerm =:= FollowerLastLogTerm andalso CandidateLastLogIndex >= FollowerLastLogIndex)
+  ),
+  IsEqualTerm andalso NotYetVotedOrVotedSamePeer andalso CandidateHasLatestLogTerm.
+
+has_quorum(Members, VotedFor) ->
+  #members{new_members=NewMembers, old_members=OldMembers} = Members,
+  #vote_granted{new_members=NewMembersVoted, old_members=OldMembersVoted} = VotedFor,
+
+  OldMembersSize = sets:size(OldMembers),
+  NewMembersSize = sets:size(NewMembers),
+
+  case {NewMembersSize, OldMembersSize} of
+    {NewMembersSize, OldMembersSize} when OldMembersSize =:= 0 ->
+      raft_consensus:has_quorum(NewMembersSize, sets:size(NewMembersVoted));
+    {NewMembersSize, OldMembersSize} ->
+      raft_consensus:has_quorum(NewMembersSize, sets:size(NewMembersVoted)) andalso
+      raft_consensus:has_quorum(OldMembersSize, sets:size(OldMembersVoted))
+  end.
+
+request_vote(NodeName, VoteArgs) when is_atom(NodeName) ->
+  Pid = whereis(NodeName),
+  % Should be cast. otherwise, deadlock occur.
+  % (Candidate A wait ack_voted from B, B wait ack_voted_from A)
+  gen_statem:cast(Pid, {request_vote, VoteArgs});
+request_vote(Pid, VoteArgs) when is_pid(Pid)->
+  gen_statem:cast(Pid, {request_vote, VoteArgs}).
+
 
 vote(CandidateName, NewTerm, RaftState0) ->
   #raft_state{vote_granted=VoteGranted0, members=Members} = RaftState0,
@@ -92,7 +146,7 @@ handle_request_vote_rpc(RaftState0, VoteArgs) ->
 
   #vote_args{candidate_name=CandidateName} = VoteArgs,
 
-  case raft_leader_election:can_vote(VotedFor, CurrentTerm, FollowerLogLastTerm, FollowerLogLastIndex, VoteArgs) of
+  case can_vote(VotedFor, CurrentTerm, FollowerLogLastTerm, FollowerLogLastIndex, VoteArgs) of
     true ->
       RaftState1 = raft_scheduler:schedule_heartbeat_timeout_and_cancel_previous_one(RaftState0),
       RaftState2 = raft_rpc_request_vote:vote(CandidateName, CurrentTerm, RaftState1),

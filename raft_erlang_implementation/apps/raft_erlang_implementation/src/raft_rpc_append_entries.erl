@@ -248,7 +248,7 @@ commit_consider_(MatchIndex, MembersSet, PreviousCommitIndex, LogEntries, Leader
     lists:foldl(
       fun({Index, MatchCount}, {AckedMatchCount0, MaxMatchIndexAcc}) ->
         AckedMatchCount = AckedMatchCount0 + MatchCount,
-        case raft_leader_election:has_quorum(MemberSize, AckedMatchCount) of
+        case raft_consensus:has_quorum(MemberSize, AckedMatchCount) of
           true -> {AckedMatchCount, max(Index, MaxMatchIndexAcc)};
           false -> {AckedMatchCount, MaxMatchIndexAcc}
         end

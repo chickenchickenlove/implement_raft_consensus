@@ -213,7 +213,7 @@ candidate(cast, start_leader_election, #raft_state{current_term=CurrentTerm}=Dat
   LastLogIndex = length(LogEntries),
   LastLogTerm = log_term(LogEntries, LastLogIndex),
 
-  VoteArgs = raft_leader_election:new_vote_arguments(my_name(), NewlyCurrentTerm, LastLogIndex, LastLogTerm),
+  VoteArgs = raft_rpc_request_vote:new_vote_arguments(my_name(), NewlyCurrentTerm, LastLogIndex, LastLogTerm),
   RpcDueExceptMe = maps:filter(fun(Member, _Timeout) ->
                                   Member =/= my_name()
                                 end, RpcDue),
@@ -278,7 +278,7 @@ candidate(cast, can_become_leader, Data0) ->
 %%  VoteGrantedSize = sets:size(VoteGranted),
 %%  MemberSize = sets:size(Members),
 
-  case raft_leader_election:has_quorum1(Members, VoteGranted) of
+  case raft_rpc_request_vote:has_quorum(Members, VoteGranted) of
     true ->
       io:format("[~p] the node ~p win the leader election. term is ~p.~n", [self(), my_name(), CurrentTerm]),
       #raft_state{next_index=NextIndex0, log_entries=Logs} = Data0,
