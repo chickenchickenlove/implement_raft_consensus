@@ -278,7 +278,6 @@ leader_should_send_append_entries_test() ->
   raft_node_state_machine:stop('A'),
   raft_node_state_machine:stop('B').
 
-%%%% TODO : Flaky Test
 when_client_send_new_entry_to_leader_then_leader_should_keep_it_test() ->
   %%% SETUP
   flush_msg_(),

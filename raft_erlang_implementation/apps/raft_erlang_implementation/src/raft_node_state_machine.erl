@@ -38,11 +38,13 @@ start(NodeName, Members) ->
 -define(ELECTION_TIMEOUT, 10000).
 
 %%% Mandatory callback functions.
-init({NodeName, Members}) ->
+init({NodeName, NewMembers}) ->
 
   erlang:register(NodeName, self()),
   % All node will be started with `follower` state.
   State = follower,
+
+  Members = #members{new_members=NewMembers, old_members=sets:new()},
 
   MatchIndex = init_match_index(Members),
   NextIndex = init_next_index(Members),
@@ -50,10 +52,10 @@ init({NodeName, Members}) ->
 
   Timer = raft_scheduler:schedule_heartbeat_timeout(),
   Data = #raft_state{election_timeout_timer=Timer,
-                  members=Members,
-                  match_index=MatchIndex,
-                  next_index=NextIndex,
-                  rpc_due=RpcDue},
+                     members=Members,
+                     match_index=MatchIndex,
+                     next_index=NextIndex,
+                     rpc_due=RpcDue},
   {ok, State, Data}.
 
 stop(NodeName) ->
@@ -201,7 +203,7 @@ candidate(cast, start_leader_election, #raft_state{current_term=CurrentTerm}=Dat
   Data3 = raft_rpc_request_vote:vote_my_self(CurrentTerm + 1, Data2),
 
   #raft_state{members=Members, current_term=NewlyCurrentTerm,
-           log_entries=LogEntries} = Data3,
+              log_entries=LogEntries} = Data3,
 
   RpcDue = init_rpc_due(Members),
   NextIndex = init_next_index(Members),
@@ -257,9 +259,9 @@ candidate(cast, {ack_request_voted, FromName, ResponseTerm, true}, Data0) ->
   Data =
     case ResponseTerm =:= CurrentTerm of
       true ->
-        #raft_state{vote_granted=VoteGranted0, rpc_due=RpcDue0} = Data0,
+        #raft_state{vote_granted=VoteGranted0, rpc_due=RpcDue0, members=Members} = Data0,
         RpcDue1 = maps:put(FromName, raft_rpc_timer_utils:infinity_rpc_due(), RpcDue0),
-        VoteGranted1 = sets:add_element(FromName, VoteGranted0),
+        VoteGranted1 = raft_rpc_request_vote:vote_granted(FromName, Members, VoteGranted0),
         Data0#raft_state{vote_granted=VoteGranted1, rpc_due=RpcDue1};
       false -> Data0
     end,
@@ -273,10 +275,10 @@ candidate(cast, {ack_request_voted, FromName, _ResponseTerm, false}, Data0) ->
 candidate(cast, can_become_leader, Data0) ->
   io:format("[~p] Node ~p got can_become_leader ~n", [self(), my_name()]),
   #raft_state{vote_granted=VoteGranted, members=Members, current_term=CurrentTerm} = Data0,
-  VoteGrantedSize = sets:size(VoteGranted),
-  MemberSize = sets:size(Members),
+%%  VoteGrantedSize = sets:size(VoteGranted),
+%%  MemberSize = sets:size(Members),
 
-  case raft_leader_election:has_quorum(MemberSize, VoteGrantedSize) of
+  case raft_leader_election:has_quorum1(Members, VoteGranted) of
     true ->
       io:format("[~p] the node ~p win the leader election. term is ~p.~n", [self(), my_name(), CurrentTerm]),
       #raft_state{next_index=NextIndex0, log_entries=Logs} = Data0,
@@ -291,7 +293,9 @@ candidate(cast, can_become_leader, Data0) ->
       Data1 = Data0#raft_state{leader=my_name(), next_index=NextIndex, rpc_due=InitRpcDue},
       NextEvent = next_event(cast, do_append_entries),
       {next_state, leader, Data1, NextEvent};
-    false -> {keep_state, Data0}
+    false ->
+      io:format("[~p] the node ~p failed to win the leader election. term is ~p.~n", [self(), my_name(), CurrentTerm]),
+      {keep_state, Data0}
   end;
 
 % In some situations an election will result in a split vote. In this case the term
@@ -367,7 +371,7 @@ leader(cast, do_append_entries, Data0) ->
 
   Data1 = raft_scheduler:schedule_append_entries(Data0),
   #raft_state{members=Members} = Data1,
-  MembersExceptMe = sets:to_list(sets:del_element(my_name(), Members)),
+  MembersExceptMe = raft_util:members_except_me(Members),
 
   #raft_state{match_index=MatchIndex, rpc_due=RpcDue0, log_entries=LogEntries, next_index=NextIndex,
            current_term=CurrentTerm, commit_index=CommitIndex} = Data0,
@@ -410,7 +414,7 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
         MatchIndex1 = maps:put(NodeName, NodeMatchIndex, MatchIndex0),
         NextIndex1 = maps:put(NodeName, NodeMatchIndex + 1, NextIndex0),
         {MaybeNewCommitIndex, MaybeNewAppliedData} =
-          case raft_rpc_append_entries:commit_if_can(MatchIndex1, sets:size(Members), CommitIndex0, LogEntries, CurrentTerm) of
+          case raft_rpc_append_entries:commit_if_can(MatchIndex1, Members, CommitIndex0, LogEntries, CurrentTerm) of
             {true, MaybeNewCommitIndex0} ->
               ReversedLogEntries = lists:reverse(LogEntries),
               MaybeNewAppliedData0 = safe_get_entry_at_index(ReversedLogEntries, MaybeNewCommitIndex0, AppliedData0),
@@ -481,13 +485,13 @@ leader({call, From}, {new_entry, Entry}, Data0) ->
   #raft_state{log_entries=Entries0, current_term=CurrentTerm} = Data0,
   Entries = [{CurrentTerm, Entry}| Entries0],
   Data1 = Data0#raft_state{log_entries=Entries},
-  io:format("Entries: ~p
-  Data1: ~p~n", [Entries, Data1]),
+%%  Data2 = raft_cluster_change:handle_cluster_change_entry_from_client(Entry, Data1),
   {keep_state, Data1, [{reply, From, success}]};
 
 leader(EventType, EventContent, Data) ->
   handle_event(EventType, EventContent, leader, Data).
 
+% For test
 handle_event({call, From}, get_timer, _State, Data) ->
   #raft_state{election_timeout_timer=Timer}=Data,
   {keep_state, Data, [{reply, From, Timer}]};
@@ -499,7 +503,8 @@ handle_event({call, From}, get_log_entries, _State, Data) ->
 
 handle_event({call, From}, get_voted_count, _State, Data) ->
   #raft_state{vote_granted=VoteGranted} = Data,
-  VotedCount = sets:size(VoteGranted),
+  #vote_granted{new_members=FromNewMembers, old_members=FromOldMembers} = VoteGranted,
+  VotedCount = sets:size(FromNewMembers) + sets:size(FromOldMembers),
   {keep_state, Data, [{reply, From, VotedCount}]};
 
 handle_event({call, From}, get_current_term, _State, Data) ->
@@ -515,21 +520,24 @@ handle_event(_EventType, _EventCount, _State, Data) ->
   {keep_state, Data}.
 
 clear_vote_granted(Data0)->
-  Data0#raft_state{vote_granted=sets:new()}.
+  Data0#raft_state{vote_granted=new_vote_granted()}.
+
+new_vote_granted() ->
+  #vote_granted{new_members=sets:new(), old_members=sets:new()}.
 
 my_name() ->
   raft_util:my_name().
 
 step_down(NewTerm, Data0) ->
   Data1 = Data0#raft_state{current_term=NewTerm,
-                        voted_for=undefined,
-                        vote_granted=sets:new()},
+                           voted_for=undefined,
+                           vote_granted=new_vote_granted()},
   {next_state, follower, Data1}.
 
 step_down(NewTerm, Data0, NextEvent) ->
   Data1 = Data0#raft_state{current_term=NewTerm,
-                        voted_for=undefined,
-                        vote_granted=sets:new()},
+                           voted_for=undefined,
+                           vote_granted=new_vote_granted()},
   {next_state, follower, Data1, NextEvent}.
 
 next_event(CastOrCall, Args) ->
@@ -537,19 +545,22 @@ next_event(CastOrCall, Args) ->
 
 init_rpc_due(Members) ->
   MustExpiredTime = 0,
+  UnionMembers = raft_util:all_members(Members),
   sets:fold(fun(Member, Acc) ->
               maps:put(Member, MustExpiredTime, Acc)
-            end, #{}, Members).
+            end, #{}, UnionMembers).
 
 init_match_index(Members) ->
+  UnionMembers = raft_util:all_members(Members),
   sets:fold(fun(Member, Acc) ->
               maps:put(Member, 0, Acc)
-            end, #{}, Members).
+            end, #{}, UnionMembers).
 
 init_next_index(Members) ->
+  UnionMembers = raft_util:all_members(Members),
   sets:fold(fun(Member, Acc) ->
               maps:put(Member, 1, Acc)
-            end, #{}, Members).
+            end, #{}, UnionMembers).
 
 log_term([], _Index) ->
   0;
@@ -566,3 +577,10 @@ safe_get_entry_at_index(LogEntries, Index, DefaultValue) ->
   catch
     _:_  -> DefaultValue
   end.
+
+
+% new, old
+% 기본적으로는 new에게서만 받는다. (old는 없는 것으로)
+% 새로운게 들어오면 -> Cnew, Cnew -> Cold로 이동한다. (각 클러스터가 동기화 한다.)
+% 기본적으로 클러스터는 Cnew, Cold에게 모두 전송한다.
+% 투표 받을 때도 Cnew, Cold에게 받은 표를 각각 집계한다.

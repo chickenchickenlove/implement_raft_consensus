@@ -1,4 +1,12 @@
 
+-record(members, {new_members = sets:new(),
+  old_members = sets:new()}
+).
+
+-record(vote_granted, {new_members = sets:new(),
+  old_members = sets:new()}
+).
+
 %%  term: leader’s term
 %%  leaderId: so follower can redirect clients
 %%  prevLogIndex: index of log entry immediately preceding new ones
@@ -71,9 +79,9 @@
   % (initialized to leader last log index + 1)
   next_index = #{} :: #{atom() := integer()},
 
-  members = sets:new() :: sets:sets(),
+  members = #members{new_members=sets:new(), old_members=sets:new()} :: #members{},
 
-  vote_granted = sets:new() :: sets:sets(),
+  vote_granted = #vote_granted{new_members=sets:new(), old_members=sets:new()} :: #vote_granted{},
 
   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   %%%%%%%%%%%%%%%%%%%%% CUSTOM %%%%%%%%%%%%%%%%%%%%%%
@@ -82,3 +90,4 @@
   append_entries_timer = undefined,
   data = undefined
 }).
+

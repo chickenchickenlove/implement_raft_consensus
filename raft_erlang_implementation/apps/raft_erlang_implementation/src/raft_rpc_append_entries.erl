@@ -218,28 +218,41 @@ do_append_entries([Member|Rest], MatchIndex, LogEntries, NextIndex, CurrentTerm,
       do_append_entries(Rest, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc)
   end.
 
+% 1,5,3,4,2, -> 5,4,3,2,1
+sort_desc_by_match_index_(MatchIndexAckedCountList) ->
+  SortFunc =
+    fun({MatchIndex1, _MatchCount1}, {MatchIndex2, _MatchCount2}) ->
+      MatchIndex1 > MatchIndex2
+    end,
+  lists:sort(SortFunc, MatchIndexAckedCountList).
 
-commit_if_can(MatchIndex, TotalMemberSize, PreviousCommitIndex, LogEntries, LeaderTerm) ->
-  SortFunc = fun({MatchIndex1, _MatchCount1}, {MatchIndex2, _MatchCount2}) ->
-    MatchIndex1 > MatchIndex2
-             end,
+commit_consider1_(MatchIndex, MembersSet, PreviousCommitIndex, LogEntries, LeaderTerm) ->
+  FilteredMatchIndex =
+    maps:filter(
+      fun(MemberName, _MatchedIndex) ->
+        sets:is_element(MemberName, MembersSet)
+      end, MatchIndex),
 
-  IndexAndAckedCountMap = maps:fold(fun(_, MatchIndex0, Acc0) ->
-    Count0 = maps:get(MatchIndex0, Acc0, 0),
-    maps:put(MatchIndex0, Count0+1, Acc0)
-                                    end, #{}, MatchIndex),
+  MatchIndexAckedCountMap =
+    maps:fold(
+      fun(_, MatchIndex0, Acc0) ->
+        Count0 = maps:get(MatchIndex0, Acc0, 0),
+        maps:put(MatchIndex0, Count0+1, Acc0)
+      end, #{}, FilteredMatchIndex),
 
-  IndexAndAckedCountList = maps:to_list(IndexAndAckedCountMap),
-  SortedMatchIndexDescOrderOfIndex = lists:sort(SortFunc, IndexAndAckedCountList),
+  MatchIndexAckedCountList = maps:to_list(MatchIndexAckedCountMap),
+  SortedMatchIndex = sort_desc_by_match_index_(MatchIndexAckedCountList),
 
+  MemberSize = sets:size(MembersSet),
   {_, MaybeNewCommitIndex} =
-    lists:foldl(fun({Index, MatchCount}, {AckedMatchCount0, MaxMatchIndexAcc}) ->
-                  AckedMatchCount = AckedMatchCount0 + MatchCount,
-                  case raft_leader_election:has_quorum(TotalMemberSize, AckedMatchCount) of
-                    true -> {AckedMatchCount, max(Index, MaxMatchIndexAcc)};
-                    false -> {AckedMatchCount, MaxMatchIndexAcc}
-                  end
-                end, {0, 0}, SortedMatchIndexDescOrderOfIndex),
+    lists:foldl(
+      fun({Index, MatchCount}, {AckedMatchCount0, MaxMatchIndexAcc}) ->
+        AckedMatchCount = AckedMatchCount0 + MatchCount,
+        case raft_leader_election:has_quorum(MemberSize, AckedMatchCount) of
+          true -> {AckedMatchCount, max(Index, MaxMatchIndexAcc)};
+          false -> {AckedMatchCount, MaxMatchIndexAcc}
+        end
+      end, {0, 0}, SortedMatchIndex),
 
   TermAtMaybeNewCommitIndex =
     case MaybeNewCommitIndex of
@@ -255,6 +268,23 @@ commit_if_can(MatchIndex, TotalMemberSize, PreviousCommitIndex, LogEntries, Lead
     true -> {IsSameWithCurrentTerm, MaybeNewCommitIndex};
     false -> {IsSameWithCurrentTerm, PreviousCommitIndex}
   end.
+
+
+commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm) ->
+  #members{new_members=NewMembers, old_members=OldMembers} = Members,
+  case sets:is_empty(OldMembers) of
+    true ->
+      {IsSameWithCurrentTerm, MaybeNewCommitIndex} = commit_consider1_(MatchIndex, NewMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
+      {IsSameWithCurrentTerm, MaybeNewCommitIndex};
+    false ->
+      {IsSameWithCurrentTermNew, MaybeNewCommitIndexNew} = commit_consider1_(MatchIndex, NewMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
+      {IsSameWithCurrentTermOld, MaybeNewCommitIndexOld} = commit_consider1_(MatchIndex, OldMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
+
+      IsSameWithCurrentTerm = IsSameWithCurrentTermNew andalso IsSameWithCurrentTermOld,
+      MaybeNewCommitIndex = min(MaybeNewCommitIndexNew, MaybeNewCommitIndexOld),
+      {IsSameWithCurrentTerm, MaybeNewCommitIndex}
+  end.
+
 
 find_log([], _CurrentIndex, _Target) ->
   ok;

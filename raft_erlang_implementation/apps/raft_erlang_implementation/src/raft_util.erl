@@ -1,12 +1,15 @@
 -module(raft_util).
 
+-include("rpc_record.hrl").
 %% API
 -export([set_timer_time/1, get_timer_time/0, clean_up_timer_time/0]).
 -export([get_node_pid/1]).
+-export([members_except_me/1]).
 -export([my_name/0]).
 -export([node_name/1]).
 -export([compare/2]).
 -export([get_entry/3]).
+-export([all_members/1]).
 
 clean_up_timer_time() ->
   catch persistent_term:erase(election_timeout).
@@ -52,3 +55,16 @@ get_entry(_Start, _End, []) ->
 
 get_entry(Start, End, Entries) ->
   lists:sublist(Entries, Start, End).
+
+-spec members_except_me(Members) -> list(atom()) when
+  Members :: #raft_state{}.
+members_except_me(Members) ->
+  MyName = my_name(),
+  #members{new_members=NewMembers0, old_members=OldMembers0} = Members,
+  UnionMembers = sets:union(NewMembers0, OldMembers0),
+  sets:to_list(sets:del_element(MyName, UnionMembers)).
+
+
+all_members(Members) ->
+  #members{new_members=NewMembers0, old_members=OldMembers0} = Members,
+  sets:union(NewMembers0, OldMembers0).

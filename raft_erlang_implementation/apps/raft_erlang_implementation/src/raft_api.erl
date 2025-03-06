@@ -1,6 +1,8 @@
 -module(raft_api).
 
 %% API
+-export([confirm_new_cluster_membership/2]).
+-export([prepare_new_cluster_membership/2]).
 -export([add_members/2]).
 -export([remove_members/2]).
 -export([add_entry/2]).
@@ -10,6 +12,26 @@
 -export([get_voted_count/1]).
 -export([get_current_term/1]).
 -export([get_log_entries/1]).
+
+
+-spec prepare_new_cluster_membership(NodeNameOrPid, NewMemberShip) -> ok when
+  NodeNameOrPid :: pid() | atom(),
+  NewMemberShip :: list(pid).
+prepare_new_cluster_membership(NodeName, NewMemberShip) when is_atom(NodeName) ->
+  Pid = whereis(NodeName),
+  gen_statem:call(Pid, {new_entry, {new_membership, NewMemberShip}});
+prepare_new_cluster_membership(Pid, NewMemberShip)  ->
+  gen_statem:call(Pid, {new_entry, {new_membership, NewMemberShip}}).
+
+-spec confirm_new_cluster_membership(NodeNameOrPid, NewMemberShip) -> ok when
+  NodeNameOrPid :: pid() | atom(),
+  NewMemberShip :: list(pid).
+confirm_new_cluster_membership(NodeName, NewMemberShip) when is_atom(NodeName) ->
+  Pid = whereis(NodeName),
+  gen_statem:call(Pid, {new_entry, {confirm_new_membership, NewMemberShip}});
+confirm_new_cluster_membership(Pid, NewMemberShip)  ->
+  gen_statem:call(Pid, {new_entry, {confirm_new_membership, NewMemberShip}}).
+
 
 -spec add_members(NodeNameOrPid, NewMembers) -> ok when
   NodeNameOrPid :: pid() | atom(),

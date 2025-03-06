@@ -5,6 +5,7 @@
 -export([new_vote_arguments/4]).
 -export([can_vote/5]).
 -export([has_quorum/2]).
+-export([has_quorum1/2]).
 
 -export_type([vote_arguments/0]).
 
@@ -29,18 +30,20 @@ new_vote_arguments(NodeName, NodeTerm, LastLogIndex, LastLogTerm) ->
              candidate_last_log_index=LastLogIndex,
              candidate_last_log_term=LastLogTerm}.
 
-start_election(Members, VoteArgs) ->
-  FilteredMembers = sets:filter(
-    fun(MemberName) ->
-      MemberPid = whereis(MemberName),
-      MemberPid =/= self()
-    end, Members),
+has_quorum1(Members, VotedFor) ->
+  #members{new_members=NewMembers, old_members=OldMembers} = Members,
+  #vote_granted{new_members=NewMembersVoted, old_members=OldMembersVoted} = VotedFor,
 
-  lists:foreach(
-    fun(MemberName) ->
-      MemberPid = whereis(MemberName),
-      gen_server:cast(MemberPid, VoteArgs)
-    end, sets:to_list(FilteredMembers)).
+  OldMembersSize = sets:size(OldMembers),
+  NewMembersSize = sets:size(NewMembers),
+
+  case {NewMembersSize, OldMembersSize} of
+    {NewMembersSize, OldMembersSize} when OldMembersSize =:= 0 ->
+      has_quorum(NewMembersSize, sets:size(NewMembersVoted));
+    {NewMembersSize, OldMembersSize} ->
+      has_quorum(NewMembersSize, sets:size(NewMembersVoted)) andalso
+      has_quorum(OldMembersSize, sets:size(OldMembersVoted))
+  end.
 
 has_quorum(TotalMemberSize, VotedMemberCount) ->
   VotedMemberCount >= (TotalMemberSize div 2) + 1.
