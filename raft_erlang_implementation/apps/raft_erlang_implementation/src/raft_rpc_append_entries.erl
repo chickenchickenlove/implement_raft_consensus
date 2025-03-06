@@ -226,7 +226,7 @@ sort_desc_by_match_index_(MatchIndexAckedCountList) ->
     end,
   lists:sort(SortFunc, MatchIndexAckedCountList).
 
-commit_consider1_(MatchIndex, MembersSet, PreviousCommitIndex, LogEntries, LeaderTerm) ->
+commit_consider_(MatchIndex, MembersSet, PreviousCommitIndex, LogEntries, LeaderTerm) ->
   FilteredMatchIndex =
     maps:filter(
       fun(MemberName, _MatchedIndex) ->
@@ -274,11 +274,11 @@ commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm) 
   #members{new_members=NewMembers, old_members=OldMembers} = Members,
   case sets:is_empty(OldMembers) of
     true ->
-      {IsSameWithCurrentTerm, MaybeNewCommitIndex} = commit_consider1_(MatchIndex, NewMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
+      {IsSameWithCurrentTerm, MaybeNewCommitIndex} = commit_consider_(MatchIndex, NewMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
       {IsSameWithCurrentTerm, MaybeNewCommitIndex};
     false ->
-      {IsSameWithCurrentTermNew, MaybeNewCommitIndexNew} = commit_consider1_(MatchIndex, NewMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
-      {IsSameWithCurrentTermOld, MaybeNewCommitIndexOld} = commit_consider1_(MatchIndex, OldMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
+      {IsSameWithCurrentTermNew, MaybeNewCommitIndexNew} = commit_consider_(MatchIndex, NewMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
+      {IsSameWithCurrentTermOld, MaybeNewCommitIndexOld} = commit_consider_(MatchIndex, OldMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
 
       IsSameWithCurrentTerm = IsSameWithCurrentTermNew andalso IsSameWithCurrentTermOld,
       MaybeNewCommitIndex = min(MaybeNewCommitIndexNew, MaybeNewCommitIndexOld),
