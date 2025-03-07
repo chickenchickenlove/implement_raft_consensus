@@ -179,10 +179,10 @@ concat_entries_([Head1|Tail1], [Head2|Tail2], Acc0, false) ->
 do_append_entries([], _MatchIndex, _LogEntries, _NextIndex, _CurrentTerm, _CommitIndex, RpcDueAcc) ->
   RpcDueAcc;
 do_append_entries([Member|Rest], MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc0) ->
-  MatchIndexOfMember = maps:get(Member, MatchIndex),
+  MatchIndexOfMember = maps:get(Member, MatchIndex, 0),
   HasLagOfLog = MatchIndexOfMember < length(LogEntries),
 
-  RpcDueOfMember = maps:get(Member, RpcDueAcc0),
+  RpcDueOfMember = maps:get(Member, RpcDueAcc0, 0),
   IsRpcExpired = raft_rpc_timer_utils:is_rpc_expired(RpcDueOfMember),
 
   case HasLagOfLog orelse IsRpcExpired of
@@ -191,7 +191,7 @@ do_append_entries([Member|Rest], MatchIndex, LogEntries, NextIndex, CurrentTerm,
       NextRpcExpiredTime = raft_rpc_timer_utils:next_rpc_due_divide_by(2),
       RpcDueAcc = maps:put(Member, NextRpcExpiredTime, RpcDueAcc0),
 
-      PrevIndex = max(maps:get(Member, NextIndex) - 1, 0),
+      PrevIndex = max(maps:get(Member, NextIndex, 0) - 1, 0),
       PrevTerm =
         case {LogEntries, PrevIndex} of
           {[], _} -> 0;
@@ -211,10 +211,10 @@ do_append_entries([Member|Rest], MatchIndex, LogEntries, NextIndex, CurrentTerm,
                         end,
 
       AppendEntriesRpc = raft_rpc_append_entries:new(CurrentTerm, my_name(), PrevIndex, PrevTerm, ToBeSentEntries, CommitIndex),
-      AppendEntriesRpcMsg = {append_entries, AppendEntriesRpc},
-
+      AppendEntriesRpcMsg = {append_entries, AppendEntriesRpc, my_name()},
       ToMemberPid = raft_util:get_node_pid(Member),
       gen_statem:cast(ToMemberPid, AppendEntriesRpcMsg),
+
       do_append_entries(Rest, MatchIndex, LogEntries, NextIndex, CurrentTerm, CommitIndex, RpcDueAcc)
   end.
 

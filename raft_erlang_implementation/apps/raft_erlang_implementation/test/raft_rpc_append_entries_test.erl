@@ -1,10 +1,10 @@
 -module(raft_rpc_append_entries_test).
 
 %% API
--export([loop_/1]).
 -include("rpc_record.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-export([loop_/1]).
 
 should_append_entries1_test() ->
   %%% GIVEN
@@ -448,6 +448,7 @@ do_append_entries1_test() ->
 
   % GIVEN
   RpcDueTime = raft_rpc_timer_utils:current_time() ,
+  FromNodeName = undefined,
 
   MembersExceptMe = ['A', 'B', 'C'],
   MatchIndex = #{'A' => 0, 'B' => 0, 'C' => 0},
@@ -468,11 +469,12 @@ do_append_entries1_test() ->
   MsgsFromC = get_messages(PidC, Timeout),
 
   ExpectedAppendEntryMsg = {append_entries, #append_entries{term=1,
-                                                            leader_name=undefined,
+                                                            leader_name=FromNodeName,
                                                             previous_log_index=0,
                                                             previous_log_term=0,
                                                             entries=[],
-                                                            leader_commit_index=0}},
+                                                            leader_commit_index=0},
+                            FromNodeName},
 
 
   ?assertEqual([ExpectedAppendEntryMsg], MsgsFromA),
@@ -528,6 +530,7 @@ do_append_entries3_test() ->
 
   %%% GIVEN
   CurrentTime = raft_rpc_timer_utils:current_time() * 2,
+  FromNodeName = undefined,
 
   MembersExceptMe = ['A', 'B', 'C'],
   MatchIndex = #{'A' => 0, 'B' => 0, 'C' => 0},
@@ -548,11 +551,12 @@ do_append_entries3_test() ->
   MsgsFromB = get_messages(PidB, Timeout),
   MsgsFromC = get_messages(PidC, Timeout),
   ExpectedAppendEntryMsg = {append_entries, #append_entries{term=1,
-                                                            leader_name=undefined,
+                                                            leader_name=FromNodeName,
                                                             previous_log_index=0,
                                                             previous_log_term=0,
                                                             entries=[{1, "A2"}, {1, "A1"}],
-                                                            leader_commit_index=0}},
+                                                            leader_commit_index=0},
+                            FromNodeName},
 
   ?assertEqual([ExpectedAppendEntryMsg], MsgsFromA),
   ?assertEqual([ExpectedAppendEntryMsg], MsgsFromB),
@@ -573,6 +577,7 @@ do_append_entries4_test() ->
 
   %%% GIVEN
   CurrentTime = raft_rpc_timer_utils:current_time(),
+  FromNodeName = undefined,
 
   MembersExceptMe = ['A', 'B', 'C'],
   MatchIndex = #{'A' => 0, 'B' => 0, 'C' => 0},
@@ -593,11 +598,12 @@ do_append_entries4_test() ->
   MsgsFromB = get_messages(PidB, Timeout),
   MsgsFromC = get_messages(PidC, Timeout),
   ExpectedAppendEntryMsg = {append_entries, #append_entries{term=1,
-                                                            leader_name=undefined,
+                                                            leader_name=FromNodeName,
                                                             previous_log_index=0,
                                                             previous_log_term=0,
                                                             entries=[{1, "A2"}, {1, "A1"}],
-                                                            leader_commit_index=0}},
+                                                            leader_commit_index=0},
+                            FromNodeName},
 
   ?assertEqual([ExpectedAppendEntryMsg], MsgsFromA),
   ?assertEqual([ExpectedAppendEntryMsg], MsgsFromB),
@@ -619,6 +625,7 @@ do_append_entries5_test() ->
   %%% GIVEN
   CurrentTime = raft_rpc_timer_utils:current_time(),
   NotExpiredTime = CurrentTime * 2,
+  FromNodeName = undefined,
 
   MembersExceptMe = ['A', 'B', 'C', 'D'],
   MatchIndex = #{'A' => 0, 'B' => 1, 'C' => 2, 'D' => 2},
@@ -640,24 +647,27 @@ do_append_entries5_test() ->
   MsgsFromC = get_messages(PidC, Timeout),
   MsgsFromD = get_messages(PidD, Timeout),
   ExpectedAppendEntryMsgA = {append_entries, #append_entries{term=1,
-                                                            leader_name=undefined,
+                                                            leader_name=FromNodeName,
                                                             previous_log_index=0,
                                                             previous_log_term=0,
                                                             entries=[{1, "A2"}, {1, "A1"}],
-                                                            leader_commit_index=0}},
+                                                            leader_commit_index=0},
+                              FromNodeName},
   ExpectedAppendEntryMsgB = {append_entries, #append_entries{term=1,
-                                                             leader_name=undefined,
+                                                             leader_name=FromNodeName,
                                                              previous_log_index=1,
                                                              previous_log_term=1,
                                                              entries=[{1, "A2"}],
-                                                             leader_commit_index=0}},
+                                                             leader_commit_index=0},
+                              FromNodeName},
   ExpectedAppendEntryMsgC = [],
   ExpectedAppendEntryMsgD = {append_entries, #append_entries{term=1,
-                                                             leader_name=undefined,
+                                                             leader_name=FromNodeName,
                                                              previous_log_index=2,
                                                              previous_log_term=1,
                                                              entries=[],
-                                                             leader_commit_index=0}},
+                                                             leader_commit_index=0},
+                              FromNodeName},
 
   ?assertEqual([ExpectedAppendEntryMsgA], MsgsFromA),
   ?assertEqual([ExpectedAppendEntryMsgB], MsgsFromB),

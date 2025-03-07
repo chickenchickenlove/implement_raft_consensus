@@ -77,9 +77,9 @@ request_vote(NodeName, VoteArgs) when is_atom(NodeName) ->
   Pid = whereis(NodeName),
   % Should be cast. otherwise, deadlock occur.
   % (Candidate A wait ack_voted from B, B wait ack_voted_from A)
-  gen_statem:cast(Pid, {request_vote, VoteArgs});
+  gen_statem:cast(Pid, {request_vote, VoteArgs, raft_util:my_name()});
 request_vote(Pid, VoteArgs) when is_pid(Pid)->
-  gen_statem:cast(Pid, {request_vote, VoteArgs}).
+  gen_statem:cast(Pid, {request_vote, VoteArgs, raft_util:my_name()}).
 
 
 vote(CandidateName, NewTerm, RaftState0) ->
@@ -109,12 +109,6 @@ vote_my_self(NewTerm, RaftState0) ->
 
 vote_granted(FromName, Members, VotedGranted0) ->
   #members{new_members=NewMembers, old_members=OldMembers} = Members,
-  % new_members이면서, old_members인 경우가 있을 수도 있네?
-  % old: A,B,C
-  % new: A,B,D
-  % new + old : A,B,C,D
-  % new, old를 다 신경쓰는거지.
-  % TODO: VoteGranted도 옮겨야 함.
   VotedGranted1 =
     case sets:is_element(FromName, NewMembers) of
       true ->

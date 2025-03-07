@@ -10,6 +10,7 @@
 -export([compare/2]).
 -export([get_entry/3]).
 -export([all_members/1]).
+-export([safe_remove_key/2]).
 
 clean_up_timer_time() ->
   catch persistent_term:erase(election_timeout).
@@ -43,9 +44,25 @@ compare(A, B) ->
     A < B -> less
   end.
 
+safe_remove_key([], Map) ->
+  Map;
+safe_remove_key([Key|Rest], Map0) ->
+  Map =
+    try
+        maps:remove(Key, Map0)
+    catch
+       _:_  -> Map0
+    end,
+  safe_remove_key(Rest, Map).
+
+
+
 % Assume that [1,2,3,4,5,6, ....]
-get_entry(0, _End, _Entries) ->
+get_entry(0, _End, []) ->
   [];
+
+get_entry(0, End, Entries) ->
+  lists:sublist(Entries, End);
 
 get_entry(_Start, 0, _Entries) ->
   [];
@@ -53,8 +70,11 @@ get_entry(_Start, 0, _Entries) ->
 get_entry(_Start, _End, []) ->
   [];
 
+get_entry(Start, End, _Entries) when Start =:= End ->
+  [];
+
 get_entry(Start, End, Entries) ->
-  lists:sublist(Entries, Start, End).
+  lists:sublist(Entries, Start+1, End).
 
 -spec members_except_me(Members) -> list(atom()) when
   Members :: #raft_state{}.

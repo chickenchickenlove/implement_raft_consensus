@@ -88,6 +88,7 @@
   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   election_timeout_timer = undefined,
   append_entries_timer = undefined,
-  data = undefined
+  data = undefined,
+  ignore_peer = []
 }).
 
