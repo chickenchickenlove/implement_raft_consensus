@@ -1,6 +1,5 @@
 -module(raft_split_vote_test).
 
-%% API
 -export([]).
 
 -include_lib("eunit/include/eunit.hrl").

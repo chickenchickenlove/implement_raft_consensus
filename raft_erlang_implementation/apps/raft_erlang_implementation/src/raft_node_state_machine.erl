@@ -68,9 +68,6 @@ stop(NodeName) ->
 % 5.1 Raft Basics
 % The leader handles all client requests (if a client contacts a follower,
 % the follower redirects it to the leader).
-% TODO : implement redirect
-
-% TODO: Update event content.
 
 % Append Entries Ack Implement.
 %% Results:
@@ -94,24 +91,16 @@ stop(NodeName) ->
 follower(cast, deprecated, Data0) ->
   {next_state, deprecated, Data0};
 
-follower(cast, {new_entry, Entry, From}, Data0) ->
+follower(cast, {new_entry, Entry, FromClient}, Data0) ->
   #raft_state{leader=LeaderName} = Data0,
   LeaderPid = raft_util:get_node_pid(LeaderName),
-
-  raft_api:add_entry_async(LeaderPid, Entry, From),
+  raft_api:add_entry_async(LeaderPid, Entry, my_name()),
   {keep_state, Data0};
 
 follower(cast, {append_entries, AppendEntriesRpc, FromNodeName},
          #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
-  case lists:member(FromNodeName, IgnorePeerName) of
-    true ->
-      io:format("[~p] Node ~p got append_entries from ~p, but ignore. ~n", [self(), my_name(), FromNodeName]),
-      {keep_state, Data0};
-    false ->
-      % In this case, `undefined` is for workaround to filter testcodes.
-      NextEvent = next_event(cast, {append_entries, AppendEntriesRpc, undefined}),
-      {keep_state, Data0, NextEvent}
-  end;
+  NextEventIfNotIgnorePeer = next_event(cast, {append_entries, AppendEntriesRpc, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
 
 follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm}=AppendEntriesRpc, _FromNodeName},
          #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm < AppendEntriesTerm ->
@@ -122,14 +111,18 @@ follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm}=AppendEn
 follower(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=_AppendEntriesRpc, _FromNodeName},
          #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm > AppendEntriesTerm ->
   io:format("[~p] Node ~p got invalid append_entries from ~p. ~n", [self(), my_name(), LeaderName]),
-  AckAppendEntriesMsg = {my_name(), CurrenTerm, false, -1},
+
   ToPid = raft_util:get_node_pid(LeaderName),
-  gen_statem:cast(ToPid, AckAppendEntriesMsg),
+  AckAppendEntries = raft_rpc_append_entries:new_ack_fail_with_default(my_name(), CurrenTerm),
+  AckMsg = raft_rpc_append_entries:new_ack_append_entries_msg(AckAppendEntries),
+
+  gen_statem:cast(ToPid, AckMsg),
   {keep_state, Data0};
 
 follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
   Data1 = raft_scheduler:schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
   #raft_state{log_entries=Logs, current_term=CurrentTerm, commit_index=CommitIndex0,
+              last_log_term=LastLogTerm0, last_log_index=LastLogIndex0,
               data=AppliedData0} = Data1,
   #append_entries{leader_name=LeaderName,
                   entries=LogsFromLeader,
@@ -142,7 +135,7 @@ follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
 
   NewLeader = LeaderName,
   IsSuccess = raft_rpc_append_entries:should_append_entries(PrevLogIndex, PrevLogTerm, Logs),
-  {UpdatedLogEntries, CommitIndex, AckAppendEntries}
+  {UpdatedLogEntries, CommitIndex, AckAppendEntries, LastLogTerm, LastLogIndex}
     = case IsSuccess of
             true ->
               %% Since the leader has declared that the index up to leaderCommit is “already safely replicated”, we can assume that the follower can commit up to that index.
@@ -150,19 +143,23 @@ follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
               %% Therefore, the follower can't commit to an index it doesn't actually have, so it must eventually commit up to the value of min(leaderCommit, the actual last index).
               {UpdatedLogEntries0, MatchIndex0} = raft_rpc_append_entries:do_concat_entries(Logs, LogsFromLeader, PrevLogIndex),
               CommitIndex1 = min(LeaderCommitIndex, MatchIndex0),
+              {MaybeNewLastLogTerm, MaybeNewLastLogIndex} =
+                raft_rpc_append_entries:get_last_log_term_and_index(UpdatedLogEntries0, LastLogTerm0, LastLogIndex0),
               SuccessAppendEntries = raft_rpc_append_entries:new_ack_success(my_name(), CurrentTerm, MatchIndex0),
-              {UpdatedLogEntries0, CommitIndex1, SuccessAppendEntries};
+              {UpdatedLogEntries0, CommitIndex1, SuccessAppendEntries, MaybeNewLastLogTerm, MaybeNewLastLogIndex};
             false ->
               {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevLogIndex, Logs),
               FailAppendEntries = raft_rpc_append_entries:new_ack_fail(my_name(), CurrentTerm, ConflictTerm, FoundFirstIndexWithConflictTerm),
-              {Logs, CommitIndex0, FailAppendEntries}
+              {Logs, CommitIndex0, FailAppendEntries, LastLogTerm0, LastLogIndex0}
           end,
 
   ToPid = raft_util:get_node_pid(LeaderName),
-  Msg = {ack_append_entries, AckAppendEntries},
-  gen_statem:cast(ToPid, Msg),
+
+  AckMsg = raft_rpc_append_entries:new_ack_append_entries_msg(AckAppendEntries),
+  gen_statem:cast(ToPid, AckMsg),
 
   Data2 = Data1#raft_state{leader=NewLeader, commit_index=CommitIndex,
+                           last_log_term=LastLogTerm, last_log_index=LastLogIndex,
                            log_entries=UpdatedLogEntries, data=AppliedData},
 
   ShouldHandleEntries = raft_util:get_entry(CommitIndex0, CommitIndex, UpdatedLogEntries),
@@ -170,7 +167,12 @@ follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
 
   {keep_state, Data3};
 
-follower(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
+follower(cast, {ack_append_entries, AckAppendEntries, FromNodeName},
+         #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {ack_append_entries, AckAppendEntries, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+follower(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}, _FromNodeName},
     #raft_state{current_term=CurrentTerm}=Data0) when CurrentTerm < NodeTerm ->
   step_down(NodeTerm, Data0, follower);
 
@@ -191,15 +193,8 @@ follower(cast, election_timeout, Data) ->
 
 follower(cast, {request_vote, VoteArgs, FromNodeName},
          #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
-  case lists:member(FromNodeName, IgnorePeerName) of
-    true ->
-      io:format("[~p] Node ~p got request_vote from ~p, but ignore. ~n", [self(), my_name(), FromNodeName]),
-      {keep_state, Data0};
-    false ->
-      % In this case, `undefined` is for workaround to filter testcodes.
-      NextEvent = next_event(cast, {request_vote, VoteArgs, undefined}),
-      {keep_state, Data0, NextEvent}
-  end;
+  NextEventIfNotIgnorePeer = next_event(cast, {request_vote, VoteArgs, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
 
 follower(cast, {request_vote, VoteArgs, FromNodeName}, #raft_state{current_term=CurrentTerm0}=Data0) ->
   #vote_args{candidate_term=CandidateTerm} = VoteArgs,
@@ -213,7 +208,12 @@ follower(cast, {request_vote, VoteArgs, FromNodeName}, #raft_state{current_term=
 
   raft_rpc_request_vote:handle_request_vote_rpc(Data1, VoteArgs);
 
-follower(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted},
+follower(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted, FromNodeName},
+    #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+follower(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted, _FromNodeName},
     #raft_state{current_term=CurrentTerm}=Data0) ->
   io:format("[~p] Node ~p got ack_request_voted ~n", [self(), my_name()]),
   case CurrentTerm < ResponseTerm of
@@ -222,7 +222,7 @@ follower(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted},
   end;
 
 follower(EventType, EventContent, Data) ->
-  handle_event(EventType, EventContent, follower, Data).
+  raft_api:handle_event(EventType, EventContent, follower, Data).
 
 %% (a) it wins the election,
 %% (b) another server establishes itself as leader
@@ -230,7 +230,7 @@ follower(EventType, EventContent, Data) ->
 
 candidate(cast, deprecated, Data0) ->
   {next_state, deprecated, Data0};
-% TODO: Update event content.
+
 candidate(cast, start_leader_election, #raft_state{current_term=CurrentTerm}=Data0) ->
   io:format("[~p] Node ~p start leader election. Term is ~p.~n", [self(), my_name(), CurrentTerm]),
   % Should consider deadlock.
@@ -276,15 +276,8 @@ candidate(cast, start_leader_election, #raft_state{current_term=CurrentTerm}=Dat
 
 candidate(cast, {request_vote, VoteArgs, FromNodeName},
           #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
-  case lists:member(FromNodeName, IgnorePeerName) of
-    true ->
-      io:format("[~p] Node ~p got request_vote from ~p, but ignore. ~n", [self(), my_name(), FromNodeName]),
-      {keep_state, Data0};
-    false ->
-      % In this case, `undefined` is for workaround to filter testcodes.
-      NextEvent = next_event(cast, {request_vote, VoteArgs, undefined}),
-      {keep_state, Data0, NextEvent}
-  end;
+  NextEventIfNotIgnorePeer = next_event(cast, {request_vote, VoteArgs, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
 
 candidate(cast, {request_vote, #vote_args{candidate_term=CandidateTerm}=VoteArgs, FromName},
           #raft_state{current_term=CurrentTerm0}=Data0) when CurrentTerm0 < CandidateTerm->
@@ -298,12 +291,17 @@ candidate(cast, {request_vote, VoteArgs, FromName}, Data0) ->
   %%% Because, Candidate already has been voted itself.
   raft_rpc_request_vote:handle_request_vote_rpc(Data0, VoteArgs);
 
-candidate(cast, {ack_request_voted, FromName, ResponseTerm, true},
+candidate(cast, {ack_request_voted, FromName, ResponseTerm, VoteGranted, FromNodeName},
+    #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {ack_request_voted, FromName, ResponseTerm, VoteGranted, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+candidate(cast, {ack_request_voted, FromName, ResponseTerm, true, _FromNodeName},
           #raft_state{current_term=CurrentTerm}=Data0) when CurrentTerm < ResponseTerm->
   io:format("[~p] Node ~p got ack_request_voted from ~p~n", [self(), my_name(), FromName]),
   step_down(ResponseTerm, Data0, candidate);
 
-candidate(cast, {ack_request_voted, FromName, ResponseTerm, true}, Data0) ->
+candidate(cast, {ack_request_voted, FromName, ResponseTerm, true, _FromNodeName}, Data0) ->
   io:format("[~p] Node ~p got ack_request_voted from ~p~n", [self(), my_name(), FromName]),
   #raft_state{current_term=CurrentTerm}=Data0,
   Data =
@@ -318,7 +316,7 @@ candidate(cast, {ack_request_voted, FromName, ResponseTerm, true}, Data0) ->
   NextEvent = next_event(cast, can_become_leader),
   {keep_state, Data, NextEvent};
 
-candidate(cast, {ack_request_voted, FromName, _ResponseTerm, false}, Data0) ->
+candidate(cast, {ack_request_voted, FromName, _ResponseTerm, false, _FromNodeName}, Data0) ->
   io:format("[~p] Node ~p got ack_request_voted from ~p~n", [self(), my_name(), FromName]),
   {keep_state, Data0};
 
@@ -363,16 +361,15 @@ candidate(cast, election_timeout, Data) ->
 % If the leader’s term (included in its RPC) is at least as large as the candidate’s current term,
 % then the candidate recognizes the leader as legitimate and returns to follower state.
 % If the term in the RPC is smaller than the candidate’s current term, then the candidate rejects the RPC and continues in candidate state.
+candidate(cast, {ack_request_voted, FromName, ResponseTerm, VoteGranted, FromNodeName},
+    #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {ack_request_voted, FromName, ResponseTerm, VoteGranted, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
 candidate(cast, {append_entries, AppendEntriesRpc, FromNodeName},
           #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
-  case lists:member(FromNodeName, IgnorePeerName) of
-    true ->
-      io:format("[~p] Node ~p got append_entries, but ignore. ~n", [self(), my_name()]),
-      {keep_state, Data0};
-    false ->
-      NextEvent = next_event(cast, {append_entries, AppendEntriesRpc, undefined}),
-      {keep_state, Data0, NextEvent}
-  end;
+  NextEventIfNotIgnorePeer = next_event(cast, {append_entries, AppendEntriesRpc, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
 
 candidate(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=_LeaderName}=AppendEntriesRpc, _FromNodeName},
          #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm < AppendEntriesTerm ->
@@ -382,19 +379,23 @@ candidate(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_
           #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm > AppendEntriesTerm ->
   io:format("[~p] Node ~p got invalid append_entries from ~p. thus, refuse it. ~n", [self(), my_name(), LeaderName]),
   AckAppendEntries = raft_rpc_append_entries:new_ack_fail_with_default(my_name(), CurrenTerm),
-  Msg = {ack_append_entries, AckAppendEntries},
+  AckMsg = raft_rpc_append_entries:new_ack_append_entries_msg(AckAppendEntries),
   ToPid = raft_util:get_node_pid(LeaderName),
-  gen_statem:cast(ToPid, Msg),
+  gen_statem:cast(ToPid, AckMsg),
   {keep_state, Data0};
 candidate(cast, {append_entries, AppendEntries, _FromNodeName}, Data0) ->
-  %% TODO : Implement Detail.
   %% For example, add commited log its local state.
   Data1 = raft_scheduler:schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
   NewTerm = raft_rpc_append_entries:get(term, AppendEntries),
   Data2 = Data1#raft_state{current_term=NewTerm},
   {next_state, follower, Data2};
 
-candidate(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
+candidate(cast, {ack_append_entries, AckAppendEntries, FromNodeName},
+    #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {ack_append_entries, AckAppendEntries, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+candidate(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}, _FromNodeName},
           #raft_state{current_term=CurrentTerm}=Data0) when CurrentTerm < NodeTerm ->
   step_down(NodeTerm, Data0, candidate);
 
@@ -410,9 +411,8 @@ candidate(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
 
 
 candidate(EventType, EventContent, Data) ->
-  handle_event(EventType, EventContent, candidate, Data).
+  raft_api:handle_event(EventType, EventContent, candidate, Data).
 
-% TODO: Update event content.
 %% Append Entries (LEADER Implementation) -> Normally async.
 %% Arguments:
 %%  term: leader’s term
@@ -434,16 +434,23 @@ leader(cast, do_append_entries, Data0) ->
   #raft_state{members=Members} = Data1,
   MembersExceptMe = raft_util:members_except_me(Members),
 
-  #raft_state{match_index=MatchIndex, rpc_due=RpcDue0, log_entries=LogEntries, next_index=NextIndex,
-           current_term=CurrentTerm, commit_index=CommitIndex} = Data0,
+  #raft_state{match_index=MatchIndex, rpc_due=RpcDue0,
+              log_entries=LogEntries, next_index=NextIndex,
+              current_term=CurrentTerm, commit_index=CommitIndex} = Data0,
 
   RpcDue = raft_rpc_append_entries:do_append_entries(MembersExceptMe, MatchIndex, LogEntries, NextIndex,
                                                       CurrentTerm, CommitIndex, RpcDue0),
   Data2 = Data1#raft_state{rpc_due=RpcDue},
   {keep_state, Data2};
 
-leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm}=AppendEntriesRpc, _FromNodeName},
+leader(cast, {append_entries, AppendEntriesRpc, FromNodeName},
+       #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {append_entries, AppendEntriesRpc, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm}=_AppendEntriesRpc, _FromNodeName},
        #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm < AppendEntriesTerm ->
+  io:format("[~p] node ~p append_entries ->step_down~n", [self(), my_name()]),
   step_down(AppendEntriesTerm, Data0, leader);
 
 leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_name=LeaderName}=_AppendEntriesRpc, _FromNodeName},
@@ -452,15 +459,21 @@ leader(cast, {append_entries, #append_entries{term=AppendEntriesTerm, leader_nam
 
   ToPid = raft_util:get_node_pid(LeaderName),
   AckAppendEntries = raft_rpc_append_entries:new_ack_fail_with_default(my_name(), CurrenTerm),
-  Msg = {ack_append_entries, AckAppendEntries},
-  gen_statem:cast(ToPid, Msg),
+  AckMsg = raft_rpc_append_entries:new_ack_append_entries_msg(AckAppendEntries),
+  gen_statem:cast(ToPid, AckMsg),
   {keep_state, Data0};
 
-leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}},
+leader(cast, {ack_append_entries, AckAppendEntries, FromNodeName},
+       #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {ack_append_entries, AckAppendEntries, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}, _FromNodeName},
        #raft_state{current_term=CurrentTerm}=Data0) when CurrentTerm < NodeTerm ->
+  io:format("[~p] node ~p ack_append_entries ->step_down~n", [self(), my_name()]),
   step_down(NodeTerm, Data0, leader);
 
-leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckAppendEntries},
+leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckAppendEntries, FromNodeName},
        #raft_state{current_term=CurrentTerm}=Data0) when CurrentTerm =:= NodeTerm ->
   #ack_append_entries{success=Success, node_name=NodeName, result=AppendEntriesResult} = AckAppendEntries,
   io:format("[~p] Node ~p got ack_append_entries. NodeName:~p ~n", [self(), my_name(), NodeName]),
@@ -519,49 +532,61 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
   Data2 = raft_cluster_change:handle_cluster_change_if_needed(ShouldHandleEntries, true, Data1),
   {keep_state, Data2};
 
-leader(cast, {ack_append_entries, _}, Data0) ->
+leader(cast, {ack_append_entries, _, _FromNodeName}, Data0) ->
   % Ignore
   {keep_state, Data0};
 
 leader(cast, election_timeout, Data) ->
   {keep_state, Data};
 
-% TODO : 이걸 추가해야만 한다.
-% 그런데 이걸 추가하면, Split Braint 테스트가 깨진다.
-% 뭐가 문제인지 확인해야한다.
-% 만약 이걸 수정하지 않으면, Split Brain 상태에서도 리더가 자꾸 깨진다.
 leader(cast, {request_vote, VoteArgs, FromNodeName},
        #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
-  io:format("[~p] node ~p, invalid request_vote~n", [self(), my_name()]),
-  case lists:member(FromNodeName, IgnorePeerName) of
-    true ->
-      io:format("[~p] Node ~p got request_vote from ~p, but ignore. ~n", [self(), my_name(), FromNodeName]),
-      {keep_state, Data0};
-    false ->
-      % In this case, `undefined` is for workaround to filter testcodes.
-      NextEvent = next_event(cast, {request_vote, VoteArgs, undefined}),
-      {keep_state, Data0, NextEvent}
-  end;
+  NextEventIfNotIgnorePeer = next_event(cast, {request_vote, VoteArgs, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+leader(cast, {request_vote, VoteArgs, FromNodeName},
+       #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {request_vote, VoteArgs, undefined}),
+  handle_ignore_if_need_or_next(NextEventIfNotIgnorePeer, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
 
 leader(cast, {request_vote, #vote_args{candidate_term=CandidateTerm}=VoteArgs, FromName},
        #raft_state{current_term=CurrentTerm0}=Data0) when CurrentTerm0 < CandidateTerm->
   NextEvent = next_event(cast, {request_vote, VoteArgs, FromName}),
+  io:format("[~p] node ~p request_vote ->step_down~n", [self(), my_name()]),
   step_down(CandidateTerm, Data0, NextEvent, leader);
 
-leader(cast, {request_vote, VoteArgs, FromName}, Data0) ->
+leader(cast, {request_vote, VoteArgs, _FromName}, Data0) ->
   %%% Leader will not vote to other.
   %%% Because, Leader already has been voted itself.
   raft_rpc_request_vote:handle_request_vote_rpc(Data0, VoteArgs);
 
-leader(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted}, Data0) ->
+leader(cast, {ack_request_voted, FromName, ResponseTerm, VoteGranted, FromNodeName},
+       #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {ack_request_voted, FromName, ResponseTerm, VoteGranted, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+leader(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted, _FromNodeName}, Data0) ->
   #raft_state{current_term=CurrentTerm}=Data0,
-  %%% TODO : Some Followers can voted after for candidate to become leader.
   case CurrentTerm < ResponseTerm of
-    true -> step_down(ResponseTerm, Data0, leader);
+    true ->
+      io:format("[~p] node ~p ack_request_voted ->step_down~n", [self(), my_name()]),
+      step_down(ResponseTerm, Data0, leader);
     false -> {keep_state, Data0}
   end;
 
-leader(cast, {new_entry, Entry, From}, Data0) ->
+leader(cast, {new_entry, Entry, FromNodeName},
+       #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  case lists:member(FromNodeName, IgnorePeerName) of
+    true ->
+      io:format("[~p] Node ~p got new_entry from ~p, but ignore. ~n", [self(), my_name(), FromNodeName]),
+      {keep_state, Data0};
+    false ->
+      % In this case, `undefined` is for workaround to filter testcodes.
+      NextEvent = next_event(cast, {new_entry, Entry, undefined}),
+      {keep_state, Data0, NextEvent}
+  end;
+
+leader(cast, {new_entry, Entry, _From}, Data0) ->
   io:format("[~p] node ~p got new entry, Entry: ~p~n,", [self(), my_name(), Entry]),
   #raft_state{log_entries=Entries0, current_term=CurrentTerm, next_index=NextIndex0, match_index=MatchIndex0} = Data0,
   NewEntry0 = {CurrentTerm, Entry},
@@ -575,58 +600,22 @@ leader(cast, {new_entry, Entry, From}, Data0) ->
   Data2 = Data1#raft_state{log_entries=Entries, match_index=MatchIndex1, next_index=NextIndex1},
   {keep_state, Data2};
 
-
 leader(EventType, EventContent, Data) ->
-  handle_event(EventType, EventContent, leader, Data).
+  raft_api:handle_event(EventType, EventContent, leader, Data).
 
 deprecated(EventType, EventContent, Data) ->
-  handle_event(EventType, EventContent, deprecated, Data).
+  raft_api:handle_event(EventType, EventContent, deprecated, Data).
 
-% For test
-handle_event({call, From}, get_timer, _State, Data) ->
-  #raft_state{election_timeout_timer=Timer}=Data,
-  {keep_state, Data, [{reply, From, Timer}]};
-handle_event({call, From}, get_state, State, Data) ->
-  {keep_state, Data, [{reply, From, State}]};
-handle_event({call, From}, get_log_entries, _State, Data) ->
-  #raft_state{log_entries=LogEntries} = Data,
-  {keep_state, Data, [{reply, From, LogEntries}]};
-
-handle_event({call, From}, get_voted_count, _State, Data) ->
-  #raft_state{vote_granted=VoteGranted} = Data,
-  #vote_granted{new_members=FromNewMembers, old_members=FromOldMembers} = VoteGranted,
-  VotedCount = sets:size(FromNewMembers) + sets:size(FromOldMembers),
-  {keep_state, Data, [{reply, From, VotedCount}]};
-
-handle_event({call, From}, get_new_members, _State, Data) ->
-  #raft_state{members=Members} = Data,
-  #members{new_members=NewMembers} = Members,
-  {keep_state, Data, [{reply, From, NewMembers}]};
-
-handle_event({call, From}, get_old_members, _State, Data) ->
-  #raft_state{members=Members} = Data,
-  #members{old_members=OldMembers} = Members,
-  {keep_state, Data, [{reply, From, OldMembers}]};
-
-handle_event({call, From}, get_current_term, _State, Data) ->
-  #raft_state{current_term=CurrentTerm} = Data,
-  {keep_state, Data, [{reply, From, CurrentTerm}]};
-
-handle_event({call, From}, get_voted_for, _State, Data) ->
-  #raft_state{voted_for=VotedFor} = Data,
-  {keep_state, Data, [{reply, From, VotedFor}]};
-
-handle_event({call, From}, {set_ignore_this_peer, IgnoreNodeName}, _State, Data0) ->
-  Data = Data0#raft_state{ignore_peer=IgnoreNodeName},
-  {keep_state, Data, [{reply, From, ok}]};
-
-handle_event({call, From}, unset_ignore_this_peer, _State, Data0) ->
-  Data = Data0#raft_state{ignore_peer=[]},
-  {keep_state, Data, [{reply, From, ok}]};
-
-handle_event(_EventType, _EventCount, _State, Data) ->
-  %% Ignore all other events.
-  {keep_state, Data}.
+handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEvent) ->
+  io:format("[~p] node ~p, invalid request_vote~n", [self(), my_name()]),
+  case lists:member(FromNodeName, IgnorePeerName) of
+    true ->
+      io:format("[~p] Node ~p got request_vote from ~p, but ignore. ~n", [self(), my_name(), FromNodeName]),
+      {keep_state, Data0};
+    false ->
+      % In this case, `undefined` is for workaround to filter testcodes.
+      {keep_state, Data0, NextEvent}
+  end.
 
 clear_vote_granted(Data0)->
   Data0#raft_state{vote_granted=new_vote_granted()}.

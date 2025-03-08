@@ -37,7 +37,7 @@ new_request_vote(NodeName, NodeTerm, LastLogIndex, LastLogTerm) ->
              candidate_last_log_term=LastLogTerm}.
 
 new_ack(CurrentTerm, VoteGranted, MyName) ->
-  {ack_request_voted, MyName, CurrentTerm, VoteGranted}.
+  {ack_request_voted, MyName, CurrentTerm, VoteGranted, MyName}.
 
 new_vote_arguments(NodeName, NodeTerm, LastLogIndex, LastLogTerm) ->
   #vote_args{candidate_name=NodeName,
@@ -50,11 +50,10 @@ can_vote(VotedFor, FollowerTerm, FollowerLastLogTerm, FollowerLastLogIndex, Vote
              candidate_term=CandidateTerm,
              candidate_last_log_term=CandidateLastLogTerm,
              candidate_last_log_index=CandidateLastLogIndex} = VotedArgs,
-
   IsEqualTerm = FollowerTerm =:= CandidateTerm,
   NotYetVotedOrVotedSamePeer = VotedFor =:= undefined orelse VotedFor =:= CandidateName,
   CandidateHasLatestLogTerm = ((CandidateLastLogTerm > FollowerLastLogTerm) orelse
-    (CandidateLastLogTerm =:= FollowerLastLogTerm andalso CandidateLastLogIndex >= FollowerLastLogIndex)
+                               (CandidateLastLogTerm =:= FollowerLastLogTerm andalso CandidateLastLogIndex >= FollowerLastLogIndex)
   ),
   IsEqualTerm andalso NotYetVotedOrVotedSamePeer andalso CandidateHasLatestLogTerm.
 
@@ -135,7 +134,7 @@ vote_granted(FromName, Members, VotedGranted0) ->
 handle_request_vote_rpc(RaftState0, VoteArgs) ->
   #raft_state{voted_for=VotedFor,
               current_term=CurrentTerm,
-              last_applied=FollowerLogLastIndex,
+              last_log_index=FollowerLogLastIndex,
               last_log_term=FollowerLogLastTerm} = RaftState0,
 
   #vote_args{candidate_name=CandidateName} = VoteArgs,

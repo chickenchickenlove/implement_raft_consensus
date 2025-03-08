@@ -6,18 +6,18 @@
 
 joint_consensus_test() ->
   %%% GIVEN -> NodeA is leader.
-  raft_util:set_timer_time(50),
+  raft_util:set_timer_time(100),
   OldRaftMembers = ['A', 'B', 'C'],
   NewRaftMembers = ['A', 'D', 'E'],
   {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers),
-  timer:sleep(30),
+  timer:sleep(80),
   {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers),
   {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers),
 
   raft_api:set_ignore_msg_from_this_peer(PidB, ['B', 'C']),
   raft_api:set_ignore_msg_from_this_peer(PidC, ['B', 'C']),
 
-  timer:sleep(1000),
+  timer:sleep(500),
   raft_test_util:assert_node_state_equal(leader, PidA),
 
   raft_api:unset_ignore_peer(PidB),
@@ -46,11 +46,11 @@ joint_consensus_test() ->
 joint_consensus1_test() ->
 
   %%% GIVEN -> NodeA is leader and RAFT Cluster is in Cold+new status.
-  raft_util:set_timer_time(50),
+  raft_util:set_timer_time(100),
   OldRaftMembers = ['A', 'B', 'C'],
   NewRaftMembers = ['A', 'D', 'E'],
   {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers),
-  timer:sleep(30),
+  timer:sleep(80),
   {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers),
   {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers),
 
@@ -94,18 +94,18 @@ joint_consensus1_test() ->
 
 joint_consensus2_test() ->
   %%% GIVEN1 -> NodeA is leader and RAFT Cluster is in Cold+new status.
-  raft_util:set_timer_time(50),
+  raft_util:set_timer_time(100),
   OldRaftMembers = ['A', 'B', 'C'],
   NewRaftMembers = ['A', 'D', 'E'],
   {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers),
-  timer:sleep(30),
+  timer:sleep(80),
   {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers),
   {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers),
 
   raft_api:set_ignore_msg_from_this_peer(PidB, ['B', 'C']),
   raft_api:set_ignore_msg_from_this_peer(PidC, ['B', 'C']),
 
-  timer:sleep(1000),
+  timer:sleep(500),
   raft_test_util:assert_node_state_equal(leader, PidA),
 
   raft_api:unset_ignore_peer(PidB),
@@ -146,19 +146,19 @@ joint_consensus2_test() ->
 
 joint_consensus4_test() ->
   %%% GIVEN -> NodeA is leader and RAFT Cluster is in Cold+new status.
-  raft_util:set_timer_time(50),
+  raft_util:set_timer_time(100),
   OldRaftMembers = ['A', 'B', 'C'],
   NewRaftMembers = ['A', 'D', 'E'],
 
   {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers),
-  timer:sleep(30),
+  timer:sleep(80),
   {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers),
   {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers),
 
   raft_api:set_ignore_msg_from_this_peer(PidB, ['B', 'C']),
   raft_api:set_ignore_msg_from_this_peer(PidC, ['B', 'C']),
 
-  timer:sleep(1000),
+  timer:sleep(500),
   raft_test_util:assert_node_state_equal(leader, PidA),
 
   raft_api:unset_ignore_peer(PidB),
@@ -194,11 +194,11 @@ joint_consensus4_test() ->
 
 joint_consensus5_test() ->
   %%% GIVEN -> NodeA is leader and RAFT Cluster is in Cold+new status, then has been confirmed new membership.
-  raft_util:set_timer_time(80),
+  raft_util:set_timer_time(100),
   OldRaftMembers = ['A', 'B', 'C'],
   NewRaftMembers = ['A', 'D', 'E'],
   {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers),
-  timer:sleep(50),
+  timer:sleep(90),
   {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers),
   {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers),
 

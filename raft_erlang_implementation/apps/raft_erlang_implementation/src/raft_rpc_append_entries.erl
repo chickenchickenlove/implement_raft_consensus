@@ -6,6 +6,7 @@
 -export([commit_if_can/5]).
 -export([get/2]).
 -export([new/6]).
+-export([new_ack_append_entries_msg/1]).
 -export([new_ack_fail_with_default/2]).
 -export([new_ack_fail/4]).
 -export([new_ack_success/3]).
@@ -13,6 +14,7 @@
 -export([find_earliest_index_at_conflict_term/2]).
 -export([find_last_index_with_same_term/2]).
 -export([should_append_entries/3]).
+-export([get_last_log_term_and_index/3]).
 -export([do_concat_entries/3]).
 -export([do_append_entries/7]).
 -export([concat_entries/3]).
@@ -31,6 +33,10 @@ new_ack_fail_with_default(NodeName, NodeTerm) ->
   AppendResult = #fail_append_entries{conflict_term=0,
                                       first_index_with_conflict_term=0},
   new_ack(NodeName, NodeTerm, false, AppendResult).
+
+new_ack_append_entries_msg(AckAppendEntries) ->
+  {ack_append_entries, AckAppendEntries, my_name()}.
+
 
 new_ack_fail(NodeName, NodeTerm, ConflictTerm, FirstIndexWithConflictTerm) ->
   AppendResult = #fail_append_entries{conflict_term=ConflictTerm,
@@ -135,6 +141,15 @@ get_log_term(Index, Logs) when Index > 0 ->
   ReversedLogs = lists:reverse(Logs),
   {Term, _Entry} = lists:nth(Index, ReversedLogs),
   Term.
+
+get_last_log_term_and_index(LogEntries, DefaultLastLogTerm, DefaultLastLogIndex) ->
+  case LogEntries of
+    [] -> {DefaultLastLogTerm, DefaultLastLogIndex};
+    [Head|_Tail] ->
+      {Term, _Data} = Head,
+      LastIndex = length(LogEntries),
+      {Term, LastIndex}
+  end.
 
 do_concat_entries(LogsIHave, LogsFromLeader, PrevIndexFromLeader) ->
   ReversedLogsIHave = lists:reverse(LogsIHave),

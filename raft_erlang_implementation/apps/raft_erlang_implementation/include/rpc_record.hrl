@@ -60,6 +60,7 @@
 
   % Custom attribute
   last_log_term = 0 :: integer(),
+  last_log_index = 0 :: integer(),
 
   leader = undefined :: atom(),
 

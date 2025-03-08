@@ -3,6 +3,10 @@
 %% API
 -include_lib("eunit/include/eunit.hrl").
 
+-export([assert_member_has_same_entries/1]).
+-export([assert_commit_index_for_members/2]).
+-export([assert_leader_commit_index/2]).
+-export([assert_equal_entries_with_ignoring_term/2]).
 -export([assert_entries_node_has/2]).
 -export([assert_node_state_equal/2]).
 -export([assert_node_state_not_equal/2]).
@@ -59,6 +63,44 @@ assert_members_equal_exactly(ExpectedNewMembers, ExpectedOldMembers, Pid) ->
   ActualOldMembers = sets:to_list(raft_api:get_old_members(Pid)),
   ?assertEqual(ExpectedNewMembers, ActualNewMembers),
   ?assertEqual(ExpectedOldMembers, ActualOldMembers).
+
+assert_equal_entries_with_ignoring_term(ExpectedEntriesWithoutTerm, Pid) ->
+  Entries = raft_api:get_log_entries(Pid),
+  ParsedEntries = parse_(Entries),
+  ?assertEqual(ExpectedEntriesWithoutTerm, ParsedEntries).
+
+assert_leader_commit_index(ExpectedCommitIndex, Pid) ->
+  LeaderPid = raft_api:get_leader_pid(Pid),
+  ActualCommitIndex = raft_api:get_commit_index(LeaderPid),
+  ?assertEqual(ExpectedCommitIndex, ActualCommitIndex).
+
+assert_commit_index_for_members(ExpectedCommitIndex, []) ->
+  ok;
+assert_commit_index_for_members(ExpectedCommitIndex, [Pid|Rest]) ->
+  ActualCommitIndex = raft_api:get_commit_index(Pid),
+  ?assertEqual(ExpectedCommitIndex, ActualCommitIndex),
+  assert_commit_index_for_members(ExpectedCommitIndex, Rest).
+
+assert_member_has_same_entries(RaftMemberPids) ->
+  EntriesSet = assert_member_has_same_entries_(RaftMemberPids, sets:new()),
+  ?assertEqual(1, sets:size(EntriesSet)).
+
+assert_member_has_same_entries_([], Acc) ->
+  Acc;
+assert_member_has_same_entries_([Pid|Rest], Acc0) ->
+  Entries = raft_api:get_log_entries(Pid),
+  Acc = sets:add_element(Entries, Acc0),
+  assert_member_has_same_entries_(Rest, Acc).
+
+parse_(Entries) ->
+  parse_(Entries, []).
+
+parse_([], Acc) ->
+  lists:reverse(Acc);
+parse_([Head|Rest]=_Entries, Acc) ->
+  {_Term, Data} = Head,
+  parse_(Rest, [Data|Acc]).
+
 
 
 flush_msg_() ->

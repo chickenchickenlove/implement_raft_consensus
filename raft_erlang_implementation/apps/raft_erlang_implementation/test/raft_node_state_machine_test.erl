@@ -85,7 +85,7 @@ follower_should_ack_vote_when_valid_candidate_sends_a_request_vote_rpc_test() ->
   AckVotedMsg = receive
                   Msg -> Msg
                 end,
-  {'$gen_cast',{ack_request_voted, VotedNodeName, VotedNodeCurrentTerm, VoteGranted}} = AckVotedMsg,
+  {'$gen_cast',{ack_request_voted, VotedNodeName, VotedNodeCurrentTerm, VoteGranted, _FromNodeName}} = AckVotedMsg,
 
   ?assertEqual(VotedNodeName, 'A'),
   ?assertEqual(VotedNodeCurrentTerm, 10),
@@ -169,7 +169,7 @@ follower_should_not_voted_when_invalid_candidate_sends_a_request_vote_rpc_test()
   AckVotedMsg = receive
                   Msg -> Msg
                 end,
-  {'$gen_cast',{ack_request_voted, VotedNodeName, VotedNodeCurrentTerm, VoteGranted}} = AckVotedMsg,
+  {'$gen_cast',{ack_request_voted, VotedNodeName, VotedNodeCurrentTerm, VoteGranted, FromNodeName}} = AckVotedMsg,
 
   ?assertEqual(VotedNodeName, 'A'),
   ?assertEqual(VotedNodeCurrentTerm, CurrentTerm),
@@ -586,11 +586,6 @@ leader_goes_down_and_new_leader_is_elected_and_multi_node_goes_down_and_restore_
   assert_entries_restore_when_stop_and_restart_node('D', ExpectedEntries, RaftMembers),
 
   safe_stop_nodes(RaftMembers).
-
-
-% TODO : InstallSnapshot 시나리오 추가 (노드 중 하나가 오랫동안 다운되었따가 재시작하는 시나리오)
-% TODO : append_entries 결과를 받았을 때, Commit 올라가는 것을 확인.
-% TODO : Split vote 확인 및 해소되는 것 확인.
 
 flush_msg_() ->
   receive
