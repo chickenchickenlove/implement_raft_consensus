@@ -19,6 +19,7 @@
 -export([get_log_entries/1]).
 -export([get_commit_index/1]).
 -export([get_leader_pid/1]).
+-export([get_snapshot/1]).
 
 -export([set_ignore_msg_from_this_peer/2]).
 -export([unset_ignore_peer/1]).
@@ -65,6 +66,9 @@ add_entry_async(NodeName, Entry, From) when is_atom(NodeName) ->
   gen_statem:cast(Pid, {new_entry, Entry, From});
 add_entry_async(Pid, Entry, From) ->
   gen_statem:cast(Pid, {new_entry, Entry, From}).
+
+get_snapshot(Pid) ->
+  gen_statem:call(Pid, get_snapshot).
 
 get_new_members(Pid) ->
   gen_statem:call(Pid, get_new_members).
@@ -128,6 +132,12 @@ handle_event({call, From}, get_voted_count, _State, Data) ->
   #vote_granted{new_members=FromNewMembers, old_members=FromOldMembers} = VoteGranted,
   VotedCount = sets:size(FromNewMembers) + sets:size(FromOldMembers),
   {keep_state, Data, [{reply, From, VotedCount}]};
+
+handle_event({call, From}, get_snapshot, _State, Data) ->
+  #raft_state{raft_configuration=RaftConfiguration} = Data,
+  #raft_configuration{snapshot_module=SnapshotModule} = RaftConfiguration,
+  Snapshot = SnapshotModule:get_snapshot(),
+  {keep_state, Data, [{reply, From, Snapshot}]};
 
 handle_event({call, From}, get_new_members, _State, Data) ->
   #raft_state{members=Members} = Data,

@@ -10,7 +10,7 @@
 
 %% API
 -export([init/1]).
--export([start/2]).
+-export([start/3]).
 -export([stop/1]).
 -export([callback_mode/0]).
 
@@ -23,7 +23,8 @@
 -type raft_state() :: follower   |
                       leader     |
                       candidate  |
-                      deprecated. % THIS IS NOT OFFICIAL RAFT STATE. IT IS ONLY FOR DISPLAYING DEPRECATED OLD NODES AS RESULT OF CLUSTER MEMBERSHIP CHANGE.
+                      % THIS IS NOT OFFICIAL RAFT STATE. IT IS ONLY FOR DISPLAYING DEPRECATED OLD NODES AS RESULT OF CLUSTER MEMBERSHIP CHANGE.
+                      deprecated.
 
 %%%%%%%%%%%%%%%%%% NOTE %%%%%%%%%%%%%%%%%%%%%
 % Follower remains in follower state as long as it receives valid RPCs from a leader or candidate.
@@ -33,14 +34,14 @@ callback_mode() ->
   state_functions.
 
 %% API.
-start(NodeName, Members) ->
+start(NodeName, Members, RaftConfig) ->
   MemberSet = sets:from_list(Members),
-  gen_statem:start(?MODULE, {NodeName, MemberSet}, []).
+  gen_statem:start(?MODULE, {NodeName, MemberSet, RaftConfig}, []).
 
 -define(ELECTION_TIMEOUT, 10000).
 
 %%% Mandatory callback functions.
-init({NodeName, NewMembers}) ->
+init({NodeName, NewMembers, RaftConfig}) ->
 
   erlang:register(NodeName, self()),
   % All node will be started with `follower` state.
@@ -57,6 +58,7 @@ init({NodeName, NewMembers}) ->
                      members=Members,
                      match_index=MatchIndex,
                      next_index=NextIndex,
+                     raft_configuration=RaftConfig,
                      rpc_due=RpcDue},
   {ok, State, Data}.
 
@@ -91,6 +93,30 @@ stop(NodeName) ->
 follower(cast, deprecated, Data0) ->
   {next_state, deprecated, Data0};
 
+follower(cast, do_install_snapshot, Data0) ->
+  {keep_state, Data0};
+
+follower(cast, {install_snapshot, Term, LeaderName, RaftSnapshot, FromNodeName},
+         #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {install_snapshot, Term, LeaderName, RaftSnapshot, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+follower(cast, {install_snapshot, InstallSnapshotTerm, LeaderName, RaftSnapshot, FromNodeName},
+    #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm < InstallSnapshotTerm ->
+  NextEvent = next_event(cast, {install_snapshot, InstallSnapshotTerm, LeaderName, RaftSnapshot, FromNodeName}),
+  step_down(InstallSnapshotTerm, Data0, NextEvent, follower);
+
+follower(cast, {install_snapshot, InstallSnapshotTerm, LeaderName, RaftSnapshot, FromNodeName},
+    #raft_state{current_term=CurrentTerm}=Data0) when CurrentTerm > InstallSnapshotTerm ->
+  AckMsg = raft_rpc_install_snapshot:new_ack_install_snapshot_message(CurrentTerm, false, -1),
+  raft_util:send_msg(LeaderName, AckMsg),
+  {keep_state, Data0};
+
+follower(cast, {install_snapshot, _Term, _LeaderName, _RaftSnapshot, _FromNodeName}=InstallSnapshotRpc,
+         Data0) ->
+  NewData = raft_rpc_install_snapshot:handle_install_snapshot(InstallSnapshotRpc, Data0),
+  {keep_state, NewData};
+
 follower(cast, {new_entry, Entry, FromClient}, Data0) ->
   #raft_state{leader=LeaderName} = Data0,
   LeaderPid = raft_util:get_node_pid(LeaderName),
@@ -123,6 +149,9 @@ follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
   Data1 = raft_scheduler:schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
   #raft_state{log_entries=Logs, current_term=CurrentTerm, commit_index=CommitIndex0,
               last_log_term=LastLogTerm0, last_log_index=LastLogIndex0,
+              last_applied=LastAppliedEntries0, raft_log_compaction_metadata=RaftLogCompactionMetadata0,
+              raft_configuration=RaftConfiguration,
+              local_raft_state=LocalRaftState0,
               data=AppliedData0} = Data1,
   #append_entries{leader_name=LeaderName,
                   entries=LogsFromLeader,
@@ -137,27 +166,26 @@ follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
   IsSuccess = raft_rpc_append_entries:should_append_entries(PrevLogIndex, PrevLogTerm, Logs),
   {UpdatedLogEntries, CommitIndex, AckAppendEntries, LastLogTerm, LastLogIndex}
     = case IsSuccess of
-            true ->
-              %% Since the leader has declared that the index up to leaderCommit is “already safely replicated”, we can assume that the follower can commit up to that index.
-              %% However, it is possible that the follower has not physically received logs up to that index yet, meaning that the actual length of the follower's logs (MatchIndex0) may be less than leaderCommit.
-              %% Therefore, the follower can't commit to an index it doesn't actually have, so it must eventually commit up to the value of min(leaderCommit, the actual last index).
-              {UpdatedLogEntries0, MatchIndex0} = raft_rpc_append_entries:do_concat_entries(Logs, LogsFromLeader, PrevLogIndex),
-              CommitIndex1 = min(LeaderCommitIndex, MatchIndex0),
-              {MaybeNewLastLogTerm, MaybeNewLastLogIndex} =
-                raft_rpc_append_entries:get_last_log_term_and_index(UpdatedLogEntries0, LastLogTerm0, LastLogIndex0),
-              SuccessAppendEntries = raft_rpc_append_entries:new_ack_success(my_name(), CurrentTerm, MatchIndex0),
-              {UpdatedLogEntries0, CommitIndex1, SuccessAppendEntries, MaybeNewLastLogTerm, MaybeNewLastLogIndex};
-            false ->
-              {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevLogIndex, Logs),
-              FailAppendEntries = raft_rpc_append_entries:new_ack_fail(my_name(), CurrentTerm, ConflictTerm, FoundFirstIndexWithConflictTerm),
-              {Logs, CommitIndex0, FailAppendEntries, LastLogTerm0, LastLogIndex0}
+        true ->
+          %% Since the leader has declared that the index up to leaderCommit is “already safely replicated”, we can assume that the follower can commit up to that index.
+          %% However, it is possible that the follower has not physically received logs up to that index yet, meaning that the actual length of the follower's logs (MatchIndex0) may be less than leaderCommit.
+          %% Therefore, the follower can't commit to an index it doesn't actually have, so it must eventually commit up to the value of min(leaderCommit, the actual last index).
+          {UpdatedLogEntries0, MatchIndex0} = raft_rpc_append_entries:do_concat_entries(Logs, LogsFromLeader, PrevLogIndex),
+          CommitIndex1 = min(LeaderCommitIndex, MatchIndex0),
+          {MaybeNewLastLogTerm, MaybeNewLastLogIndex} =
+            raft_rpc_append_entries:get_last_log_term_and_index(UpdatedLogEntries0, LastLogTerm0, LastLogIndex0),
+          SuccessAppendEntries = raft_rpc_append_entries:new_ack_success(my_name(), CurrentTerm, MatchIndex0),
+          {UpdatedLogEntries0, CommitIndex1, SuccessAppendEntries, MaybeNewLastLogTerm, MaybeNewLastLogIndex};
+        false ->
+          {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevLogIndex, Logs),
+          FailAppendEntries = raft_rpc_append_entries:new_ack_fail(my_name(), CurrentTerm, ConflictTerm, FoundFirstIndexWithConflictTerm),
+          {Logs, CommitIndex0, FailAppendEntries, LastLogTerm0, LastLogIndex0}
           end,
 
   ToPid = raft_util:get_node_pid(LeaderName),
 
   AckMsg = raft_rpc_append_entries:new_ack_append_entries_msg(AckAppendEntries),
   gen_statem:cast(ToPid, AckMsg),
-
   Data2 = Data1#raft_state{leader=NewLeader, commit_index=CommitIndex,
                            last_log_term=LastLogTerm, last_log_index=LastLogIndex,
                            log_entries=UpdatedLogEntries, data=AppliedData},
@@ -165,7 +193,13 @@ follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
   ShouldHandleEntries = raft_util:get_entry(CommitIndex0, CommitIndex, UpdatedLogEntries),
   Data3 = raft_cluster_change:handle_cluster_change_if_needed(ShouldHandleEntries, false, Data2),
 
-  {keep_state, Data3};
+  {MaybeNewRaftState, MaybeNewLastAppliedEntryWithIndex} =
+    apply_entries_to_local_raft_state(UpdatedLogEntries, CommitIndex0, CommitIndex, LocalRaftState0, LastAppliedEntries0, RaftLogCompactionMetadata0),
+
+  {MaybeNewRaftLogCompactionMetadata, MaybeNewEntries} = raft_log_compaction:make_snapshot_if_needed(MaybeNewRaftState, RaftLogCompactionMetadata0, CommitIndex, UpdatedLogEntries, MaybeNewLastAppliedEntryWithIndex, RaftConfiguration),
+  Data4 = Data3#raft_state{raft_log_compaction_metadata=MaybeNewRaftLogCompactionMetadata, log_entries=MaybeNewEntries},
+
+  {keep_state, Data4};
 
 follower(cast, {ack_append_entries, AckAppendEntries, FromNodeName},
          #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
@@ -230,6 +264,32 @@ follower(EventType, EventContent, Data) ->
 
 candidate(cast, deprecated, Data0) ->
   {next_state, deprecated, Data0};
+
+candidate(cast, do_install_snapshot, Data0) ->
+  %%% It's enough to ignore do_install_snapshot when it is candidate.
+  {keep_state, Data0};
+
+candidate(cast, {install_snapshot, Term, LeaderName, RaftSnapshot, FromNodeName},
+          #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {install_snapshot, Term, LeaderName, RaftSnapshot, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+candidate(cast, {install_snapshot, InstallSnapshotTerm, LeaderName, RaftSnapshot, FromNodeName},
+          #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm < InstallSnapshotTerm ->
+  NextEvent = next_event(cast, {install_snapshot, InstallSnapshotTerm, LeaderName, RaftSnapshot, FromNodeName}),
+  step_down(InstallSnapshotTerm, Data0, NextEvent, follower);
+
+candidate(cast, {install_snapshot, InstallSnapshotTerm, LeaderName, RaftSnapshot, FromNodeName},
+          #raft_state{current_term=CurrentTerm}=Data0) when CurrentTerm > InstallSnapshotTerm ->
+  AckMsg = raft_rpc_install_snapshot:new_ack_install_snapshot_message(CurrentTerm, false, -1),
+  raft_util:send_msg(LeaderName, AckMsg),
+  {keep_state, Data0};
+
+candidate(cast, {install_snapshot, _Term, _LeaderName, _RaftSnapshot, _FromNodeName}=InstallSnapshotRpc,
+          Data0) ->
+  NewData = raft_rpc_install_snapshot:handle_install_snapshot(InstallSnapshotRpc, Data0),
+  {keep_state, NewData};
+
 
 candidate(cast, start_leader_election, #raft_state{current_term=CurrentTerm}=Data0) ->
   io:format("[~p] Node ~p start leader election. Term is ~p.~n", [self(), my_name(), CurrentTerm]),
@@ -336,6 +396,11 @@ candidate(cast, can_become_leader, Data0) ->
                             end, #{}, NextIndex0),
       InitRpcDue = init_rpc_due(Members),
       Data1 = Data0#raft_state{leader=my_name(), next_index=NextIndex, rpc_due=InitRpcDue},
+
+      #raft_state{raft_configuration=RaftConfiguration} = Data1,
+      #raft_configuration{interval_of_install_snapshot=IntervalOfInstallSnapshot} = RaftConfiguration,
+      raft_scheduler:schedule_install_snapshot(IntervalOfInstallSnapshot),
+
       NextEvent = next_event(cast, do_append_entries),
       io:format("[~p] node ~p win the leader election. term is ~p.~n", [self(), my_name(), CurrentTerm]),
       {next_state, leader, Data1, NextEvent};
@@ -427,6 +492,49 @@ candidate(EventType, EventContent, Data) ->
 leader(cast, deprecated, Data0) ->
   {next_state, deprecated, Data0};
 
+leader(cast, do_install_snapshot, Data0) ->
+  #raft_state{raft_configuration=RaftConfiguration} = Data0,
+  #raft_configuration{interval_of_install_snapshot=IntervalOfInstallSnapshot} = RaftConfiguration,
+  raft_scheduler:schedule_install_snapshot(IntervalOfInstallSnapshot),
+  raft_rpc_install_snapshot:do_install_snapshot(Data0),
+  {keep_state, Data0};
+
+leader(cast, {install_snapshot, Term, LeaderName, RaftSnapshot, FromNodeName},
+       #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {install_snapshot, Term, LeaderName, RaftSnapshot, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+leader(cast, {install_snapshot, InstallSnapshotTerm, LeaderName, RaftSnapshot, FromNodeName},
+       #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm < InstallSnapshotTerm ->
+  NextEvent = next_event(cast, {install_snapshot, InstallSnapshotTerm, LeaderName, RaftSnapshot, FromNodeName}),
+  step_down(InstallSnapshotTerm, Data0, NextEvent, follower);
+
+leader(cast, {install_snapshot, InstallSnapshotTerm, LeaderName, RaftSnapshot, FromNodeName},
+       #raft_state{current_term=CurrentTerm}=Data0) when CurrentTerm > InstallSnapshotTerm ->
+  AckMsg = raft_rpc_install_snapshot:new_ack_install_snapshot_message(CurrentTerm, false, -1),
+  raft_util:send_msg(LeaderName, AckMsg),
+  {keep_state, Data0};
+
+leader(cast, {install_snapshot, _Term, _LeaderName, _RaftSnapshot, _FromNodeName}=InstallSnapshotRpc,
+       Data0) ->
+  %%% Ignore, Because it can be reached to here.
+  {keep_state, Data0};
+
+leader(cast, {ack_install_snapshot, PeerName, AckInstallSnapshotTerm, IsSuccess, MatchIndex, FromNodeName},
+       #raft_state{ignore_peer=IgnorePeerName}=Data0) when FromNodeName =/= undefined ->
+  NextEventIfNotIgnorePeer = next_event(cast, {ack_install_snapshot, PeerName, AckInstallSnapshotTerm, IsSuccess, undefined}),
+  handle_ignore_if_need_or_next(FromNodeName, IgnorePeerName, Data0, NextEventIfNotIgnorePeer);
+
+leader(cast, {ack_install_snapshot, PeerName, AckInstallSnapshotTerm, IsSuccess, MatchIndex, FromNodeName},
+       #raft_state{current_term=CurrenTerm}=Data0) when CurrenTerm < AckInstallSnapshotTerm ->
+  NextEvent = next_event(cast, {ack_install_snapshot, PeerName, AckInstallSnapshotTerm, IsSuccess, MatchIndex, FromNodeName}),
+  step_down(AckInstallSnapshotTerm, Data0, NextEvent, follower);
+
+leader(cast, {ack_install_snapshot, _PeerName, _AckInstallSnapshotTerm, _IsSuccess, _MatchIndex, _FromNodeName}=Msg, Data0) ->
+  NewData = raft_rpc_install_snapshot:handle_ack_install_snapshot(Msg, Data0),
+  {keep_state, NewData};
+
+
 leader(cast, do_append_entries, Data0) ->
   io:format("[~p] Node ~p got do_append_entires ~n", [self(), my_name()]),
 
@@ -478,7 +586,11 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
   #ack_append_entries{success=Success, node_name=NodeName, result=AppendEntriesResult} = AckAppendEntries,
   io:format("[~p] Node ~p got ack_append_entries. NodeName:~p ~n", [self(), my_name(), NodeName]),
   #raft_state{match_index=MatchIndex0, next_index=NextIndex0, commit_index=CommitIndex0,
+              local_raft_state=LocalRaftState0, raft_log_compaction_metadata=RaftLogCompactionMetadata0,
+              last_applied=LastAppliedEntry0, raft_configuration=RaftConfiguration,
               members=Members, log_entries=LogEntries, data=AppliedData0} = Data0,
+
+
 
   {MatchIndex, NextIndex, CommitIndex, AppliedData} =
     case Success of
@@ -487,7 +599,7 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
         MatchIndex1 = maps:put(NodeName, NodeMatchIndex, MatchIndex0),
         NextIndex1 = maps:put(NodeName, NodeMatchIndex + 1, NextIndex0),
         {MaybeNewCommitIndex, MaybeNewAppliedData} =
-          case raft_rpc_append_entries:commit_if_can(MatchIndex1, Members, CommitIndex0, LogEntries, CurrentTerm) of
+          case raft_rpc_append_entries:commit_if_can(MatchIndex1, Members, CommitIndex0, LogEntries, CurrentTerm, RaftLogCompactionMetadata0) of
             {true, MaybeNewCommitIndex0} ->
               ReversedLogEntries = lists:reverse(LogEntries),
               MaybeNewAppliedData0 = safe_get_entry_at_index(ReversedLogEntries, MaybeNewCommitIndex0, AppliedData0),
@@ -495,7 +607,6 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
             {false, _ShouldIgnoreCommitIndex} ->
               {CommitIndex0, AppliedData0}
           end,
-
         {MatchIndex1, NextIndex1, MaybeNewCommitIndex, MaybeNewAppliedData};
       false ->
         #fail_append_entries{conflict_term=ConflictTerm, first_index_with_conflict_term=FirstIndexConflictTerm} = AppendEntriesResult,
@@ -522,6 +633,7 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
         {MatchIndexInCaseOfFalse, NextIndexInCaseOfFalse, CommitIndex0, AppliedData0}
     end,
 
+
   Data1 = Data0#raft_state{next_index=NextIndex, match_index=MatchIndex, commit_index=CommitIndex, data=AppliedData},
 
   %%% When leader commit to new index, that index become consensus.
@@ -530,7 +642,18 @@ leader(cast, {ack_append_entries, #ack_append_entries{node_term=NodeTerm}=AckApp
   %%% Cnew is already consensused. so we don't care Cold anymore even if Cold cannot get last leader commit which indicates {confirm_new_membership, ...}.
   ShouldHandleEntries = raft_util:get_entry(CommitIndex0, CommitIndex, lists:reverse(LogEntries)),
   Data2 = raft_cluster_change:handle_cluster_change_if_needed(ShouldHandleEntries, true, Data1),
-  {keep_state, Data2};
+
+  {MaybeNewRaftState, MaybeNewLastAppliedEntryWithIndex} =
+    apply_entries_to_local_raft_state(LogEntries, CommitIndex0, CommitIndex,
+                                      LocalRaftState0, LastAppliedEntry0, RaftLogCompactionMetadata0),
+
+  {MaybeNewRaftLogCompactionMetadata, MaybeNewEntries} =
+    raft_log_compaction:make_snapshot_if_needed(MaybeNewRaftState, RaftLogCompactionMetadata0, CommitIndex,
+                                                LogEntries, MaybeNewLastAppliedEntryWithIndex, RaftConfiguration),
+
+  Data3 = Data2#raft_state{raft_log_compaction_metadata=MaybeNewRaftLogCompactionMetadata, log_entries=MaybeNewEntries},
+
+  {keep_state, Data3};
 
 leader(cast, {ack_append_entries, _, _FromNodeName}, Data0) ->
   % Ignore
@@ -569,7 +692,7 @@ leader(cast, {ack_request_voted, _FromName, ResponseTerm, _Granted, _FromNodeNam
   #raft_state{current_term=CurrentTerm}=Data0,
   case CurrentTerm < ResponseTerm of
     true ->
-      io:format("[~p] node ~p ack_request_voted ->step_down~n", [self(), my_name()]),
+      io:format("[~p] node ~p ack_request_voted -> step_down~n", [self(), my_name()]),
       step_down(ResponseTerm, Data0, leader);
     false -> {keep_state, Data0}
   end;
@@ -683,3 +806,41 @@ reply(Msg, From) when is_pid(From)->
 reply(Msg, FromName) ->
   From = raft_util:get_node_pid(FromName),
   reply(Msg, From).
+
+
+%% @private
+%% TODO : Declare spec
+apply_entries_to_local_raft_state([], _PreviousCommitIndex, _NewCommitIndex, LocalRaftState, LastAppliedEntry, RaftLogCompactionMetadata) ->
+  #raft_log_compaction_metadata{current_start_index=StartIndex} = RaftLogCompactionMetadata,
+  LastRaftEntryWithIndex = raft_index_util:to_last_log_entry_with_index(LastAppliedEntry, StartIndex),
+  {LocalRaftState, LastRaftEntryWithIndex};
+
+apply_entries_to_local_raft_state(Entries, PreviousCommitIndex, NewCommitIndex, LocalRaftState0, LastAppliedEntry, RaftLogCompactionMetadata) ->
+
+  PreviousCommitIndexInEntries = raft_log_compaction:from_start_index(PreviousCommitIndex, RaftLogCompactionMetadata),
+  NewCommitIndexInEntries = raft_log_compaction:from_start_index(NewCommitIndex, RaftLogCompactionMetadata),
+
+  ReversedEntries = lists:reverse(Entries),
+
+  EntriesToBeApplied = raft_entry_util:sublist(ReversedEntries, PreviousCommitIndexInEntries, NewCommitIndexInEntries),
+  case EntriesToBeApplied of
+    [] ->
+      #raft_log_compaction_metadata{current_start_index=StartIndex} = RaftLogCompactionMetadata,
+      LastRaftEntryWithIndex = #raft_entry_with_index{raft_entry=LastAppliedEntry, raft_index=StartIndex-1},
+      {LocalRaftState0, LastRaftEntryWithIndex};
+
+    EntriesToBeApplied ->
+      [LastEntry|_] = EntriesToBeApplied,
+      Length = length(EntriesToBeApplied),
+      RaftState = raft_command:commands(EntriesToBeApplied, LocalRaftState0),
+
+      IndexOfLastEntry = raft_log_compaction:from_start_index(Length, RaftLogCompactionMetadata),
+
+      LastRaftEntryWithIndex = #raft_entry_with_index{raft_entry=LastEntry, raft_index=IndexOfLastEntry},
+      {RaftState, LastRaftEntryWithIndex}
+  end.
+
+
+%% @private
+in_entries(DesiredIndex, StartIndex) ->
+  DesiredIndex - StartIndex + 1.

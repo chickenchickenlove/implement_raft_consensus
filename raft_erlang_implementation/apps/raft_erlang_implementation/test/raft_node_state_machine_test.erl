@@ -8,7 +8,7 @@
 initialized_test() ->
   %%% WHEN
   raft_util:set_timer_time(150),
-  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
 
   %%% THEN
   State = raft_api:get_state(Pid),
@@ -27,7 +27,7 @@ initialized_test() ->
 follow_turns_to_candidate_when_election_timeout_occur_test() ->
   %%% GIVEN
   raft_util:set_timer_time(150),
-  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
 
   %%% WHEN : Trigger election timeout.
   timer:sleep(300),
@@ -49,7 +49,7 @@ follow_turns_to_candidate_when_election_timeout_occur_test() ->
 follower_should_refresh_its_timer_when_valid_candidate_sends_a_request_vote_rpc_test() ->
   %%% GIVEN
   raft_util:set_timer_time(150),
-  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
   PreviousTimer = raft_api:get_timer(Pid),
   erlang:register('B', self()),
   ValidTermId = 10,
@@ -73,7 +73,7 @@ follower_should_ack_vote_when_valid_candidate_sends_a_request_vote_rpc_test() ->
 
   %%% GIVEN
   raft_util:set_timer_time(150),
-  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
   erlang:register('B', self()),
 
   %%% WHEN
@@ -102,7 +102,7 @@ follower_should_update_its_state_when_valid_candidate_sends_a_request_vote_rpc_t
 
   %%% GIVEN
   raft_util:set_timer_time(150),
-  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
   erlang:register('B', self()),
 
   %%% WHEN
@@ -129,7 +129,7 @@ follower_should_not_refresh_its_timer_when_invalid_candidate_sends_a_requested_r
 
   %%% GIVEN
   raft_util:set_timer_time(150),
-  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
   PreviousTimer = raft_api:get_timer(Pid),
 
   erlang:register('B', self()),
@@ -155,7 +155,7 @@ follower_should_not_voted_when_invalid_candidate_sends_a_request_vote_rpc_test()
 
   %%% GIVEN
   raft_util:set_timer_time(150),
-  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
 
   CurrentTerm = raft_api:get_current_term(Pid),
   erlang:register('B', self()),
@@ -187,7 +187,7 @@ follower_should_not_update_its_state_when_invalid_candidate_sends_a_request_vote
 
   %%% GIVEN
   raft_util:set_timer_time(150),
-  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
 
   CurrentTerm = raft_api:get_current_term(Pid),
   erlang:register('B', self()),
@@ -216,7 +216,7 @@ candidate_turns_to_leader_immediately_if_alone_in_cluster_test() ->
 
   %%% GIVEN
   raft_util:set_timer_time(150),
-  {ok, Pid} = raft_node_state_machine:start('A', ['A']),
+  {ok, Pid} = raft_node_state_machine:start('A', ['A'], raft_test_factory:default_raft_config()),
 
   %%% WHEN
   timer:sleep(300),
@@ -239,7 +239,7 @@ candidate_should_ignore_append_entries_with_older_term_test() ->
 
   %%% GIVEN
   raft_util:set_timer_time(150),
-  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, Pid} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
 
   %%% WHEN
   timer:sleep(300),
@@ -260,23 +260,22 @@ leader_should_send_append_entries_test() ->
 
   %%% GIVEN
   raft_util:set_timer_time(50),
-  {ok, PidA} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  RaftMembers = ['A', 'B', 'C'],
+
+  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
 
   timer:sleep(40),
-  {ok, PidB} = raft_node_state_machine:start('B', ['A', 'B', 'C']),
+  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers, raft_test_factory:default_raft_config()),
 
   %%% WHEN -> election timeout can occur at least 5 times.
   timer:sleep(500),
 
   %%% THEN
-  RaftStateA = raft_api:get_state(PidA),
-  RaftStateB = raft_api:get_state(PidB),
-  ?assertEqual(leader, RaftStateA),
-  ?assertEqual(follower, RaftStateB),
+  raft_test_util:assert_node_state_equal_exactly(1, leader, [PidA, PidB]),
+  raft_test_util:assert_node_state_equal_exactly(1, follower, [PidA, PidB]),
 
   %%% CLEAN UP
-  raft_node_state_machine:stop('A'),
-  raft_node_state_machine:stop('B').
+  safe_stop_nodes(RaftMembers).
 
 when_client_send_new_entry_to_leader_then_leader_should_keep_it_test() ->
   %%% SETUP
@@ -284,9 +283,9 @@ when_client_send_new_entry_to_leader_then_leader_should_keep_it_test() ->
 
   %%% GIVEN
   raft_util:set_timer_time(50),
-  {ok, PidA} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, PidA} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
   timer:sleep(40),
-  {ok, _PidB} = raft_node_state_machine:start('B', ['A', 'B', 'C']),
+  {ok, _PidB} = raft_node_state_machine:start('B', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
 
   timer:sleep(200),
 
@@ -308,10 +307,10 @@ when_client_send_new_entry_to_leader_then_it_should_propagate_to_follower_test()
 
   %%% GIVEN
   raft_util:set_timer_time(50),
-  {ok, PidA} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, PidA} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
   timer:sleep(50),
-  {ok, PidB} = raft_node_state_machine:start('B', ['A', 'B', 'C']),
-  {ok, PidC} = raft_node_state_machine:start('C', ['A', 'B', 'C']),
+  {ok, PidB} = raft_node_state_machine:start('B', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
 
   timer:sleep(200),
 
@@ -337,10 +336,10 @@ when_client_send_two_new_entry_to_leader_then_it_should_propagate_to_follower_te
 
   %%% GIVEN
   raft_util:set_timer_time(50),
-  {ok, PidA} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, PidA} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
   timer:sleep(50),
-  {ok, PidB} = raft_node_state_machine:start('B', ['A', 'B', 'C']),
-  {ok, PidC} = raft_node_state_machine:start('C', ['A', 'B', 'C']),
+  {ok, PidB} = raft_node_state_machine:start('B', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
 
   timer:sleep(200),
 
@@ -366,10 +365,10 @@ when_client_send_two_new_entry_to_leader_immediately_then_it_should_propagate_to
 
   %%% GIVEN
   raft_util:set_timer_time(50),
-  {ok, PidA} = raft_node_state_machine:start('A', ['A', 'B', 'C']),
+  {ok, PidA} = raft_node_state_machine:start('A', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
   timer:sleep(50),
-  {ok, PidB} = raft_node_state_machine:start('B', ['A', 'B', 'C']),
-  {ok, PidC} = raft_node_state_machine:start('C', ['A', 'B', 'C']),
+  {ok, PidB} = raft_node_state_machine:start('B', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', ['A', 'B', 'C'], raft_test_factory:default_raft_config()),
 
   timer:sleep(200),
 
@@ -398,11 +397,11 @@ add_entry_redirect_test() ->
   %%% GIVEN
   raft_util:set_timer_time(50),
   RaftMembers = ['A', 'B', 'C', 'D'],
-  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(50),
-  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers),
-  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers, raft_test_factory:default_raft_config()),
 
   %%% WHEN
   timer:sleep(200),
@@ -434,11 +433,11 @@ leader_goes_down_and_new_leader_is_elected_and_previous_leader_can_be_follower_t
   %%% GIVEN1
   raft_util:set_timer_time(50),
   RaftMembers = ['A', 'B', 'C', 'D'],
-  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(50),
-  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers),
-  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers, raft_test_factory:default_raft_config()),
 
   %%% WHEN1
   timer:sleep(200),
@@ -459,7 +458,7 @@ leader_goes_down_and_new_leader_is_elected_and_previous_leader_can_be_follower_t
   ?assertEqual(true, LeaderElected),
 
   %%% WHEN3
-  {ok, NewPidA} = raft_node_state_machine:start('A', RaftMembers),
+  {ok, NewPidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(200),
 
   %%% THEN3
@@ -495,11 +494,11 @@ leader_goes_down_and_new_leader_is_elected_and_previous_leader_can_restore_logs_
   %%% GIVEN1
   raft_util:set_timer_time(50),
   RaftMembers = ['A', 'B', 'C', 'D'],
-  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(50),
-  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers),
-  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers, raft_test_factory:default_raft_config()),
 
   %%% WHEN1
   timer:sleep(200),
@@ -534,7 +533,7 @@ leader_goes_down_and_new_leader_is_elected_and_previous_leader_can_restore_logs_
   ?assertEqual(true, LeaderElected),
 
   %%% WHEN3
-  {ok, NewPidA} = raft_node_state_machine:start('A', RaftMembers),
+  {ok, NewPidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(200),
 
   %%% THEN3
@@ -553,11 +552,11 @@ leader_goes_down_and_new_leader_is_elected_and_multi_node_goes_down_and_restore_
   %%% GIVEN1
   raft_util:set_timer_time(50),
   RaftMembers = ['A', 'B', 'C', 'D'],
-  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(50),
-  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers),
-  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers, raft_test_factory:default_raft_config()),
 
   %%% WHEN1
   timer:sleep(200),
@@ -608,6 +607,6 @@ assert_entries_restore_when_stop_and_restart_node(NodeName, ExpectedEntries, Raf
   raft_node_state_machine:stop(NodeName),
 
   %%% WHEN3
-  {ok, Pid} = raft_node_state_machine:start(NodeName, RaftMembers),
+  {ok, Pid} = raft_node_state_machine:start(NodeName, RaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(200),
   raft_test_util:assert_entries_node_has(ExpectedEntries, Pid).

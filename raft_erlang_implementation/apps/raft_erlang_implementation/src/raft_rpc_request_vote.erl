@@ -30,6 +30,12 @@
 
 -type vote_arguments() :: {candidate_term(), candidate_id(), last_log_index(), last_log_term()}.
 
+-type vote_args() :: #vote_args{}.
+
+-type rpc_message() :: {request_vote, vote_args(), atom()}.
+
+-type rpc_ack_message() :: {ack_request_voted, atom(), integer(), boolean(), atom()}.
+
 new_request_vote(NodeName, NodeTerm, LastLogIndex, LastLogTerm) ->
   #vote_args{candidate_term=NodeTerm,
              candidate_name=NodeName,

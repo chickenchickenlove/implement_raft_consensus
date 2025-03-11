@@ -9,10 +9,10 @@ joint_consensus_test() ->
   raft_util:set_timer_time(100),
   OldRaftMembers = ['A', 'B', 'C'],
   NewRaftMembers = ['A', 'D', 'E'],
-  {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(80),
-  {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers, raft_test_factory:default_raft_config()),
 
   raft_api:set_ignore_msg_from_this_peer(PidB, ['B', 'C']),
   raft_api:set_ignore_msg_from_this_peer(PidC, ['B', 'C']),
@@ -23,10 +23,9 @@ joint_consensus_test() ->
   raft_api:unset_ignore_peer(PidB),
   raft_api:unset_ignore_peer(PidC),
 
-
   %%% WHEN1 -> Start new membership and prepare.
-  {ok, PidD} = raft_node_state_machine:start('D', NewRaftMembers),
-  {ok, PidE} = raft_node_state_machine:start('E', NewRaftMembers),
+  {ok, PidD} = raft_node_state_machine:start('D', NewRaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidE} = raft_node_state_machine:start('E', NewRaftMembers, raft_test_factory:default_raft_config()),
   raft_api:prepare_new_cluster_membership(PidA, NewRaftMembers),
 
   %%% THEN1
@@ -49,10 +48,10 @@ joint_consensus1_test() ->
   raft_util:set_timer_time(100),
   OldRaftMembers = ['A', 'B', 'C'],
   NewRaftMembers = ['A', 'D', 'E'],
-  {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(80),
-  {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers, raft_test_factory:default_raft_config()),
 
   raft_api:set_ignore_msg_from_this_peer(PidB, ['B', 'C']),
   raft_api:set_ignore_msg_from_this_peer(PidC, ['B', 'C']),
@@ -63,8 +62,8 @@ joint_consensus1_test() ->
   raft_api:unset_ignore_peer(PidB),
   raft_api:unset_ignore_peer(PidC),
 
-  {ok, PidD} = raft_node_state_machine:start('D', NewRaftMembers),
-  {ok, PidE} = raft_node_state_machine:start('E', NewRaftMembers),
+  {ok, PidD} = raft_node_state_machine:start('D', NewRaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidE} = raft_node_state_machine:start('E', NewRaftMembers, raft_test_factory:default_raft_config()),
 
   raft_api:prepare_new_cluster_membership(PidA, NewRaftMembers),
 
@@ -97,10 +96,10 @@ joint_consensus2_test() ->
   raft_util:set_timer_time(100),
   OldRaftMembers = ['A', 'B', 'C'],
   NewRaftMembers = ['A', 'D', 'E'],
-  {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(80),
-  {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers, raft_test_factory:default_raft_config()),
 
   raft_api:set_ignore_msg_from_this_peer(PidB, ['B', 'C']),
   raft_api:set_ignore_msg_from_this_peer(PidC, ['B', 'C']),
@@ -113,8 +112,8 @@ joint_consensus2_test() ->
 
   %%% WHEN1 -> RAFT cluster get A1 entry and prepare new membership.
   raft_api:add_entry_async(PidA, "A1", self()),
-  {ok, PidD} = raft_node_state_machine:start('D', NewRaftMembers),
-  {ok, PidE} = raft_node_state_machine:start('E', NewRaftMembers),
+  {ok, PidD} = raft_node_state_machine:start('D', NewRaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidE} = raft_node_state_machine:start('E', NewRaftMembers, raft_test_factory:default_raft_config()),
   raft_api:prepare_new_cluster_membership(PidA, NewRaftMembers),
 
   timer:sleep(300),
@@ -150,10 +149,10 @@ joint_consensus4_test() ->
   OldRaftMembers = ['A', 'B', 'C'],
   NewRaftMembers = ['A', 'D', 'E'],
 
-  {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(80),
-  {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers, raft_test_factory:default_raft_config()),
 
   raft_api:set_ignore_msg_from_this_peer(PidB, ['B', 'C']),
   raft_api:set_ignore_msg_from_this_peer(PidC, ['B', 'C']),
@@ -164,8 +163,8 @@ joint_consensus4_test() ->
   raft_api:unset_ignore_peer(PidB),
   raft_api:unset_ignore_peer(PidC),
 
-  {ok, PidD} = raft_node_state_machine:start('D', NewRaftMembers),
-  {ok, PidE} = raft_node_state_machine:start('E', NewRaftMembers),
+  {ok, PidD} = raft_node_state_machine:start('D', NewRaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidE} = raft_node_state_machine:start('E', NewRaftMembers, raft_test_factory:default_raft_config()),
 
   raft_api:prepare_new_cluster_membership(PidA, NewRaftMembers),
 
@@ -197,10 +196,10 @@ joint_consensus5_test() ->
   raft_util:set_timer_time(100),
   OldRaftMembers = ['A', 'B', 'C'],
   NewRaftMembers = ['A', 'D', 'E'],
-  {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', OldRaftMembers, raft_test_factory:default_raft_config()),
   timer:sleep(90),
-  {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', OldRaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', OldRaftMembers, raft_test_factory:default_raft_config()),
 
   raft_api:set_ignore_msg_from_this_peer(PidB, ['B', 'C']),
   raft_api:set_ignore_msg_from_this_peer(PidC, ['B', 'C']),
@@ -211,8 +210,8 @@ joint_consensus5_test() ->
   raft_api:unset_ignore_peer(PidB),
   raft_api:unset_ignore_peer(PidC),
 
-  {ok, PidD} = raft_node_state_machine:start('D', NewRaftMembers),
-  {ok, PidE} = raft_node_state_machine:start('E', NewRaftMembers),
+  {ok, PidD} = raft_node_state_machine:start('D', NewRaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidE} = raft_node_state_machine:start('E', NewRaftMembers, raft_test_factory:default_raft_config()),
 
   raft_api:prepare_new_cluster_membership(PidA, NewRaftMembers),
 

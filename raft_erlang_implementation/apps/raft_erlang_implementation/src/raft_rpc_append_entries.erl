@@ -3,7 +3,7 @@
 -include("rpc_record.hrl").
 
 %% API
--export([commit_if_can/5]).
+-export([commit_if_can/6]).
 -export([get/2]).
 -export([new/6]).
 -export([new_ack_append_entries_msg/1]).
@@ -241,7 +241,7 @@ sort_desc_by_match_index_(MatchIndexAckedCountList) ->
     end,
   lists:sort(SortFunc, MatchIndexAckedCountList).
 
-commit_consider_(MatchIndex, MembersSet, PreviousCommitIndex, LogEntries, LeaderTerm) ->
+commit_consider_(MatchIndex, MembersSet, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompactionMetadata0) ->
   FilteredMatchIndex =
     maps:filter(
       fun(MemberName, _MatchedIndex) ->
@@ -259,6 +259,7 @@ commit_consider_(MatchIndex, MembersSet, PreviousCommitIndex, LogEntries, Leader
   SortedMatchIndex = sort_desc_by_match_index_(MatchIndexAckedCountList),
 
   MemberSize = sets:size(MembersSet),
+  % TODO 여기가 문제 같음. Commit이 안되고 있음.
   {_, MaybeNewCommitIndex} =
     lists:foldl(
       fun({Index, MatchCount}, {AckedMatchCount0, MaxMatchIndexAcc}) ->
@@ -269,11 +270,15 @@ commit_consider_(MatchIndex, MembersSet, PreviousCommitIndex, LogEntries, Leader
         end
       end, {0, 0}, SortedMatchIndex),
 
+  #raft_log_compaction_metadata{current_start_index=StartIndex} = RaftLogCompactionMetadata0,
+  MaybeNewCommitIndex1 = MaybeNewCommitIndex,
+  MaybeNewCommitIndexInEntries = raft_log_compaction:actual_index_in_entries(MaybeNewCommitIndex1, RaftLogCompactionMetadata0),
+
   TermAtMaybeNewCommitIndex =
-    case MaybeNewCommitIndex of
+    case MaybeNewCommitIndexInEntries of
       0 -> PreviousCommitIndex;
-      MaybeNewCommitIndex ->
-        {FoundTerm, _Data}  = find_log(LogEntries, length(LogEntries), MaybeNewCommitIndex),
+      MaybeNewCommitIndexInEntries ->
+        {FoundTerm, _Data}  = find_log(LogEntries, length(LogEntries), MaybeNewCommitIndexInEntries),
         FoundTerm
     end,
 
@@ -285,15 +290,15 @@ commit_consider_(MatchIndex, MembersSet, PreviousCommitIndex, LogEntries, Leader
   end.
 
 
-commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm) ->
+commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompactionMetadata0) ->
   #members{new_members=NewMembers, old_members=OldMembers} = Members,
   case sets:is_empty(OldMembers) of
     true ->
-      {IsSameWithCurrentTerm, MaybeNewCommitIndex} = commit_consider_(MatchIndex, NewMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
+      {IsSameWithCurrentTerm, MaybeNewCommitIndex} = commit_consider_(MatchIndex, NewMembers, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompactionMetadata0),
       {IsSameWithCurrentTerm, MaybeNewCommitIndex};
     false ->
-      {IsSameWithCurrentTermNew, MaybeNewCommitIndexNew} = commit_consider_(MatchIndex, NewMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
-      {IsSameWithCurrentTermOld, MaybeNewCommitIndexOld} = commit_consider_(MatchIndex, OldMembers, PreviousCommitIndex, LogEntries, LeaderTerm),
+      {IsSameWithCurrentTermNew, MaybeNewCommitIndexNew} = commit_consider_(MatchIndex, NewMembers, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompactionMetadata0),
+      {IsSameWithCurrentTermOld, MaybeNewCommitIndexOld} = commit_consider_(MatchIndex, OldMembers, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompactionMetadata0),
 
       IsSameWithCurrentTerm = IsSameWithCurrentTermNew andalso IsSameWithCurrentTermOld,
       MaybeNewCommitIndex = min(MaybeNewCommitIndexNew, MaybeNewCommitIndexOld),

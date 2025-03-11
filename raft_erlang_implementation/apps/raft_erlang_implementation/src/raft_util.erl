@@ -11,6 +11,11 @@
 -export([get_entry/3]).
 -export([all_members/1]).
 -export([safe_remove_key/2]).
+-export([send_msg/2]).
+
+send_msg(PeerName, Message) ->
+  ToMemberPid = raft_util:get_node_pid(PeerName),
+  gen_statem:cast(ToMemberPid, Message).
 
 clean_up_timer_time() ->
   catch persistent_term:erase(election_timeout).

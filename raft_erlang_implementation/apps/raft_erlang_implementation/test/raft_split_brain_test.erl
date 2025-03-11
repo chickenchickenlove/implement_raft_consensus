@@ -11,14 +11,14 @@ split_brain1_test() ->
   %%% GIVEN1 -> Raft nodes are given
   raft_util:set_timer_time(50),
   RaftMembers = ['A', 'B', 'C', 'D', 'E', 'F'],
-  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
   raft_util:set_timer_time(150),
   timer:sleep(30),
-  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers),
-  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers),
-  {ok, PidE} = raft_node_state_machine:start('E', RaftMembers),
-  {ok, PidF} = raft_node_state_machine:start('F', RaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidE} = raft_node_state_machine:start('E', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidF} = raft_node_state_machine:start('F', RaftMembers, raft_test_factory:default_raft_config()),
 
   %%% WHEN1 : make Node 'A' leader.
   IgnoreMembers = ['B', 'C', 'D', 'E', 'F'],
@@ -139,14 +139,14 @@ split_brain2_test() ->
   %%% GIVEN1 -> Raft nodes are given
   raft_util:set_timer_time(50),
   RaftMembers = ['A', 'B', 'C', 'D', 'E', 'F'],
-  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
   raft_util:set_timer_time(150),
   timer:sleep(30),
-  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers),
-  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers),
-  {ok, PidE} = raft_node_state_machine:start('E', RaftMembers),
-  {ok, PidF} = raft_node_state_machine:start('F', RaftMembers),
+  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidE} = raft_node_state_machine:start('E', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidF} = raft_node_state_machine:start('F', RaftMembers, raft_test_factory:default_raft_config()),
 
   %%% WHEN1 : make Node 'A' leader.
   IgnoreMembers = ['B', 'C', 'D', 'E', 'F'],

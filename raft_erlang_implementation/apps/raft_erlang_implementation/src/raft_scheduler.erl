@@ -6,6 +6,7 @@
 -export([schedule_heartbeat_timeout/0]).
 -export([schedule_heartbeat_timeout_and_cancel_previous_one/1]).
 -export([schedule_append_entries/1]).
+-export([schedule_install_snapshot/1]).
 
 
 schedule_heartbeat_timeout() ->
@@ -31,6 +32,10 @@ schedule_append_entries(Data0) ->
 
   {ok, Timer} = timer:apply_after(ExpiredAfter, gen_statem, cast, [self(), do_append_entries]),
   Data0#raft_state{append_entries_timer=Timer}.
+
+schedule_install_snapshot(Interval) ->
+  {ok, Timer} = timer:apply_after(Interval, gen_statem, cast, [self(), do_install_snapshot]),
+  Timer.
 
 jitter_election_timeout(GivenTime) ->
   Jitter = 1.0 + rand:uniform(),
