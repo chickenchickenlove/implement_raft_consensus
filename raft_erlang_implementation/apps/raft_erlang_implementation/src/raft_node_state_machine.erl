@@ -23,7 +23,8 @@
 -type raft_state() :: follower   |
                       leader     |
                       candidate  |
-                      deprecated. % THIS IS NOT OFFICIAL RAFT STATE. IT IS ONLY FOR DISPLAYING DEPRECATED OLD NODES AS RESULT OF CLUSTER MEMBERSHIP CHANGE.
+                      % THIS IS NOT OFFICIAL RAFT STATE. IT IS ONLY FOR DISPLAYING DEPRECATED OLD NODES AS RESULT OF CLUSTER MEMBERSHIP CHANGE.
+                      deprecated.
 
 %%%%%%%%%%%%%%%%%% NOTE %%%%%%%%%%%%%%%%%%%%%
 % Follower remains in follower state as long as it receives valid RPCs from a leader or candidate.
@@ -123,6 +124,7 @@ follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
   Data1 = raft_scheduler:schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
   #raft_state{log_entries=Logs, current_term=CurrentTerm, commit_index=CommitIndex0,
               last_log_term=LastLogTerm0, last_log_index=LastLogIndex0,
+              local_raft_state=LocalRaftState0, first_index_in_current_entries=FirstIndexInCurrentEntries0,
               data=AppliedData0} = Data1,
   #append_entries{leader_name=LeaderName,
                   entries=LogsFromLeader,
@@ -157,6 +159,8 @@ follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
 
   AckMsg = raft_rpc_append_entries:new_ack_append_entries_msg(AckAppendEntries),
   gen_statem:cast(ToPid, AckMsg),
+
+  LocalRaftState = apply_entries_to_state(UpdatedLogEntries, FirstIndexInCurrentEntries0, CommitIndex0, CommitIndex, LocalRaftState0),
 
   Data2 = Data1#raft_state{leader=NewLeader, commit_index=CommitIndex,
                            last_log_term=LastLogTerm, last_log_index=LastLogIndex,
@@ -683,3 +687,37 @@ reply(Msg, From) when is_pid(From)->
 reply(Msg, FromName) ->
   From = raft_util:get_node_pid(FromName),
   reply(Msg, From).
+
+
+
+apply_entries_to_state([], _FirstIndexInCurrentEntries, _PreviousCommitIndex, _NewCommitIndex, State0) ->
+  State0;
+apply_entries_to_state(Entries, FirstIndexInCurrentEntries, PreviousCommitIndex, NewCommitIndex, State0) ->
+  PreviousCommitIndexInEntries = in_entries(PreviousCommitIndex, FirstIndexInCurrentEntries),
+  NewCommitIndexInEntries = in_entries(NewCommitIndex, FirstIndexInCurrentEntries),
+
+  ReversedEntries = lists:reverse(Entries),
+  EntriesToBeApplied = lists:sublist(ReversedEntries, PreviousCommitIndexInEntries, NewCommitIndexInEntries),
+
+  raft_command:commands(EntriesToBeApplied, State0).
+
+make_snapshot_if_needed(SnapshotModule, LocalRaftState, CurrentStartIndex, CommitIndex, Entries0) ->
+  % TODO : 아래 부분 수정 필요.
+  CommitIndexInEntries = in_entries(CurrentStartIndex, CommitIndex),
+
+
+  % LastIncludedIndex 확인
+  % LastIncludeTerm 확인
+  % LocalState 확인
+  LastIncludedIndex = -1,
+  LastIncludedTerm = -1,
+  Snapshot = SnapshotModule:create_snapshot(LastIncludedIndex),
+  SnapshotModule:upsert_snapshot(Snapshot),
+
+  NewStartIndex = CommitIndexInEntries,
+  NewEntries0 = Entries0,
+  {NewStartIndex, NewEntries0}.
+
+in_entries(DesiredIndex, StartIndex) ->
+  DesiredIndex - StartIndex + 1.
+

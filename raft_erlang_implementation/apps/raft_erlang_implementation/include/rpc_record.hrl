@@ -88,8 +88,22 @@
   %%%%%%%%%%%%%%%%%%%%% CUSTOM %%%%%%%%%%%%%%%%%%%%%%
   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   election_timeout_timer = undefined,
+
   append_entries_timer = undefined,
+
   data = undefined,
-  ignore_peer = []
+
+  ignore_peer = [],
+
+  local_raft_state = #{},
+
+  first_index_in_current_entries = 1,
+
+  snapshot_module = raft_snapshot_ets
 }).
 
+
+-record(raft_snapshot, {state = #{},
+                        last_included_index = 0,
+                        last_included_term = 0
+}).
