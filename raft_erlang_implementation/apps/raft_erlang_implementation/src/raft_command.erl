@@ -17,7 +17,8 @@ commands([FirstCommand|Rest]=_Commands, LocalRaftState0) ->
   LocalRaftState1 = command(FirstCommand, LocalRaftState0),
   commands(Rest, LocalRaftState1).
 
-
+%% TODO: declare spec.
+%% @private
 command({raft_set, Key, Value}, LocalRaftState0) ->
   maps:put(Key, Value, LocalRaftState0);
 command({raft_delete, Key}, LocalRaftState0) ->

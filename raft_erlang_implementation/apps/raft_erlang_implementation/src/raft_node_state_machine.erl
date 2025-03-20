@@ -124,6 +124,8 @@ follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
   Data1 = raft_scheduler:schedule_heartbeat_timeout_and_cancel_previous_one(Data0),
   #raft_state{log_entries=Logs, current_term=CurrentTerm, commit_index=CommitIndex0,
               last_log_term=LastLogTerm0, last_log_index=LastLogIndex0,
+              last_applied=LastAppliedEntries0, raft_log_compaction_config=RaftLogCompactionConfig0,
+              raft_configuration=RaftConfiguration,
               local_raft_state=LocalRaftState0, first_index_in_current_entries=FirstIndexInCurrentEntries0,
               data=AppliedData0} = Data1,
   #append_entries{leader_name=LeaderName,
@@ -139,35 +141,37 @@ follower(cast, {append_entries, AppendEntriesRpc, _FromNodeName}, Data0)  ->
   IsSuccess = raft_rpc_append_entries:should_append_entries(PrevLogIndex, PrevLogTerm, Logs),
   {UpdatedLogEntries, CommitIndex, AckAppendEntries, LastLogTerm, LastLogIndex}
     = case IsSuccess of
-            true ->
-              %% Since the leader has declared that the index up to leaderCommit is “already safely replicated”, we can assume that the follower can commit up to that index.
-              %% However, it is possible that the follower has not physically received logs up to that index yet, meaning that the actual length of the follower's logs (MatchIndex0) may be less than leaderCommit.
-              %% Therefore, the follower can't commit to an index it doesn't actually have, so it must eventually commit up to the value of min(leaderCommit, the actual last index).
-              {UpdatedLogEntries0, MatchIndex0} = raft_rpc_append_entries:do_concat_entries(Logs, LogsFromLeader, PrevLogIndex),
-              CommitIndex1 = min(LeaderCommitIndex, MatchIndex0),
-              {MaybeNewLastLogTerm, MaybeNewLastLogIndex} =
-                raft_rpc_append_entries:get_last_log_term_and_index(UpdatedLogEntries0, LastLogTerm0, LastLogIndex0),
-              SuccessAppendEntries = raft_rpc_append_entries:new_ack_success(my_name(), CurrentTerm, MatchIndex0),
-              {UpdatedLogEntries0, CommitIndex1, SuccessAppendEntries, MaybeNewLastLogTerm, MaybeNewLastLogIndex};
-            false ->
-              {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevLogIndex, Logs),
-              FailAppendEntries = raft_rpc_append_entries:new_ack_fail(my_name(), CurrentTerm, ConflictTerm, FoundFirstIndexWithConflictTerm),
-              {Logs, CommitIndex0, FailAppendEntries, LastLogTerm0, LastLogIndex0}
+        true ->
+          %% Since the leader has declared that the index up to leaderCommit is “already safely replicated”, we can assume that the follower can commit up to that index.
+          %% However, it is possible that the follower has not physically received logs up to that index yet, meaning that the actual length of the follower's logs (MatchIndex0) may be less than leaderCommit.
+          %% Therefore, the follower can't commit to an index it doesn't actually have, so it must eventually commit up to the value of min(leaderCommit, the actual last index).
+          {UpdatedLogEntries0, MatchIndex0} = raft_rpc_append_entries:do_concat_entries(Logs, LogsFromLeader, PrevLogIndex),
+          CommitIndex1 = min(LeaderCommitIndex, MatchIndex0),
+          {MaybeNewLastLogTerm, MaybeNewLastLogIndex} =
+            raft_rpc_append_entries:get_last_log_term_and_index(UpdatedLogEntries0, LastLogTerm0, LastLogIndex0),
+          SuccessAppendEntries = raft_rpc_append_entries:new_ack_success(my_name(), CurrentTerm, MatchIndex0),
+          {UpdatedLogEntries0, CommitIndex1, SuccessAppendEntries, MaybeNewLastLogTerm, MaybeNewLastLogIndex};
+        false ->
+          {ConflictTerm, FoundFirstIndexWithConflictTerm} = raft_rpc_append_entries:find_earliest_index_at_conflict_term(PrevLogIndex, Logs),
+          FailAppendEntries = raft_rpc_append_entries:new_ack_fail(my_name(), CurrentTerm, ConflictTerm, FoundFirstIndexWithConflictTerm),
+          {Logs, CommitIndex0, FailAppendEntries, LastLogTerm0, LastLogIndex0}
           end,
 
   ToPid = raft_util:get_node_pid(LeaderName),
 
   AckMsg = raft_rpc_append_entries:new_ack_append_entries_msg(AckAppendEntries),
   gen_statem:cast(ToPid, AckMsg),
-
-  LocalRaftState = apply_entries_to_state(UpdatedLogEntries, FirstIndexInCurrentEntries0, CommitIndex0, CommitIndex, LocalRaftState0),
-
   Data2 = Data1#raft_state{leader=NewLeader, commit_index=CommitIndex,
                            last_log_term=LastLogTerm, last_log_index=LastLogIndex,
                            log_entries=UpdatedLogEntries, data=AppliedData},
 
   ShouldHandleEntries = raft_util:get_entry(CommitIndex0, CommitIndex, UpdatedLogEntries),
   Data3 = raft_cluster_change:handle_cluster_change_if_needed(ShouldHandleEntries, false, Data2),
+
+  {MaybeNewRaftState, MaybeNewLastAppliedEntry} = apply_entries_to_state(UpdatedLogEntries, FirstIndexInCurrentEntries0, CommitIndex0, CommitIndex, LocalRaftState0, LastAppliedEntries0),
+  make_snapshot_if_needed(MaybeNewRaftState, RaftLogCompactionConfig0, CommitIndex, UpdatedLogEntries, RaftConfiguration),
+  Data4 = Data3#raft_state{}
+
 
   {keep_state, Data3};
 
@@ -689,35 +693,56 @@ reply(Msg, FromName) ->
   reply(Msg, From).
 
 
-
-apply_entries_to_state([], _FirstIndexInCurrentEntries, _PreviousCommitIndex, _NewCommitIndex, State0) ->
-  State0;
-apply_entries_to_state(Entries, FirstIndexInCurrentEntries, PreviousCommitIndex, NewCommitIndex, State0) ->
+%% @private
+%% TODO : Declare spec
+apply_entries_to_state([], _FirstIndexInCurrentEntries, _PreviousCommitIndex, _NewCommitIndex, LocalRaftState, LastAppliedEntry) ->
+  {LocalRaftState, LastAppliedEntry};
+apply_entries_to_state(Entries, FirstIndexInCurrentEntries, PreviousCommitIndex, NewCommitIndex, LocalRaftState0, LastAppliedEntry) ->
   PreviousCommitIndexInEntries = in_entries(PreviousCommitIndex, FirstIndexInCurrentEntries),
   NewCommitIndexInEntries = in_entries(NewCommitIndex, FirstIndexInCurrentEntries),
 
   ReversedEntries = lists:reverse(Entries),
   EntriesToBeApplied = lists:sublist(ReversedEntries, PreviousCommitIndexInEntries, NewCommitIndexInEntries),
 
-  raft_command:commands(EntriesToBeApplied, State0).
+  case EntriesToBeApplied of
+    [] -> {LocalRaftState0, LastAppliedEntry};
+    EntriesToBeApplied ->
+      % TODO : LastEntry는 Index를 포함하지 않음. 그걸 쓰도록 바꿔줘야함.
+      [LastEntry|_] = lists:reverse(EntriesToBeApplied),
+      RaftState = raft_command:commands(EntriesToBeApplied, LocalRaftState0),
+      {RaftState, LastEntry}
+  end.
 
-make_snapshot_if_needed(SnapshotModule, LocalRaftState, CurrentStartIndex, CommitIndex, Entries0) ->
-  % TODO : 아래 부분 수정 필요.
-  CommitIndexInEntries = in_entries(CurrentStartIndex, CommitIndex),
+%% @private
+%% TODO : Declare Spec.
+%% TODO : Put it into proper module. -> raft_log_compaction:handle(...)?
+make_snapshot_if_needed(RaftState, RaftLogCompactionConfig0, CommitIndex, Entries0, LastAppliedEntries, RaftConfiguration) ->
+  #raft_log_compaction_config{current_start_index=CurrentStartIndex} = RaftLogCompactionConfig0,
+  #raft_configuration{snapshot_module=SnapshotModule, max_log_size=MaxLogSize} = RaftConfiguration,
+  case length(Entries0) > MaxLogSize of
+    false ->
+      {RaftLogCompactionConfig0, Entries0};
+    true ->
+      CommitIndexInEntries = in_entries(CurrentStartIndex, CommitIndex),
 
+      % TODO : LastEntry는 Index를 포함하지 않음. 그걸 쓰도록 바꿔줘야함.
+      % LastIncludedIndex 확인
+      % LastIncludeTerm 확인
+      % LocalState 확인
+      {LastIncludedTerm, LastIncludedIndex} = LastAppliedEntries,
+      % LocalState, LastIncludedIndex, LastIncludedTerm
+      NewSnapshot = SnapshotModule:create_snapshot(RaftState, LastIncludedIndex, LastIncludedTerm),
+      SnapshotModule:upsert_snapshot(NewSnapshot),
 
-  % LastIncludedIndex 확인
-  % LastIncludeTerm 확인
-  % LocalState 확인
-  LastIncludedIndex = -1,
-  LastIncludedTerm = -1,
-  Snapshot = SnapshotModule:create_snapshot(LastIncludedIndex),
-  SnapshotModule:upsert_snapshot(Snapshot),
+      % TODO : 이 부분도 확인이 필요함. (Commit Index까지 반영했으니 Commit까지 짜른다)
+      % 1. Start = CommitIndex + 1,  (CommitIndex가 0인 경우에는 아무것도 하지 않도록 하는 코너케이스)
+      % 2. NewEntries = lists:sublist(Entries0, StartIndex), 같은 느낌?
+      NewStartIndex = CommitIndexInEntries,
+      NewEntries0 = Entries0,
+      {NewStartIndex, NewEntries0}
+  end.
 
-  NewStartIndex = CommitIndexInEntries,
-  NewEntries0 = Entries0,
-  {NewStartIndex, NewEntries0}.
-
+%% @private
 in_entries(DesiredIndex, StartIndex) ->
   DesiredIndex - StartIndex + 1.
 

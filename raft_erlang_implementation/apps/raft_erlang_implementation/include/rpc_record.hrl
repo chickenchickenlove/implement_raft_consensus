@@ -56,7 +56,7 @@
 
   % index of highest log entry applied to state machine.
   % initialized to 0, increases monotonically.
-  last_applied = 0 :: integer(),
+  last_applied = {0, 0} :: integer(),
 
   % Custom attribute
   last_log_term = 0 :: integer(),
@@ -99,11 +99,25 @@
 
   first_index_in_current_entries = 1,
 
-  snapshot_module = raft_snapshot_ets
+%%  snapshot_module = raft_snapshot_ets,
+
+  raft_log_compaction_config = #raft_log_compaction_config{},
+  raft_configuration = #raft_configuration{}
 }).
 
 
--record(raft_snapshot, {state = #{},
+-record(raft_snapshot, {raft_state = #{},
                         last_included_index = 0,
                         last_included_term = 0
+}).
+
+-record(raft_log_compaction_config, {current_start_index=0}).
+
+
+-define(DEFAULT_MAX_LOG_SIZE, 100).
+-define(DEFAULT_SNAPSHOT_MODULE, raft_snapshot_ets).
+
+-record(raft_configuration, {
+  max_log_size = raft_config_util:get(max_log_length, ?DEFAULT_MAX_LOG_SIZE),
+  snapshot_module = raft_config_util:get(raft_snapshot_module, ?DEFAULT_SNAPSHOT_MODULE)
 }).
