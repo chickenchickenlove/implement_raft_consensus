@@ -12,10 +12,10 @@ split_vote_test() ->
   RaftMembers = ['A', 'B', 'C', 'D'],
   raft_util:set_timer_time(50),
 
-  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers),
-  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers),
-  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers, raft_test_factory:default_raft_config()),
 
   raft_api:set_ignore_msg_from_this_peer(PidA, ['B', 'C']),
   raft_api:set_ignore_msg_from_this_peer(PidB, ['A', 'D']),
@@ -46,10 +46,10 @@ split_vote_and_eventually_resolved_test() ->
   RaftMembers = ['A', 'B', 'C', 'D'],
   raft_util:set_timer_time(50),
 
-  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers),
-  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers),
-  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers),
-  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers),
+  {ok, PidA} = raft_node_state_machine:start('A', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidB} = raft_node_state_machine:start('B', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidC} = raft_node_state_machine:start('C', RaftMembers, raft_test_factory:default_raft_config()),
+  {ok, PidD} = raft_node_state_machine:start('D', RaftMembers, raft_test_factory:default_raft_config()),
 
   raft_api:set_ignore_msg_from_this_peer(PidA, ['B', 'C']),
   raft_api:set_ignore_msg_from_this_peer(PidB, ['A', 'D']),

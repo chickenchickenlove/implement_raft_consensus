@@ -39,6 +39,7 @@ $ rebar3 eunit
 ===> Compiling raft_erlang_implementation
 ===> Performing EUnit tests...
 ..................................................................................................
-Finished in 27.326 seconds
-98 tests, 0 failures
+Finished in 29.611 seconds
+110 tests, 0 failures
+
 ```

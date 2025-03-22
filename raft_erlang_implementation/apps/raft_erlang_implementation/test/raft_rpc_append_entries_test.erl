@@ -686,10 +686,11 @@ commit_if_can1_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(false, IsSameWithCurrentTerm),
@@ -703,10 +704,11 @@ commit_if_can2_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(false, IsSameWithCurrentTerm),
@@ -719,10 +721,11 @@ commit_if_can3_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex}
-    = raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    = raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(true, IsSameWithCurrentTerm),
@@ -735,10 +738,11 @@ commit_if_can4_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(true, IsSameWithCurrentTerm),
@@ -751,10 +755,11 @@ commit_if_can5_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(false, IsSameWithCurrentTerm),
@@ -767,10 +772,11 @@ commit_if_can6_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 11,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(false, IsSameWithCurrentTerm),
@@ -783,10 +789,11 @@ commit_if_can_with_joint_consensus1_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(true, IsSameWithCurrentTerm),
@@ -800,10 +807,11 @@ commit_if_can_with_joint_consensus2_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(0, MaybeNewCommitIndex),
@@ -817,10 +825,11 @@ commit_if_can_with_joint_consensus3_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(0, MaybeNewCommitIndex),
@@ -835,10 +844,11 @@ commit_if_can_with_joint_consensus4_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(0, MaybeNewCommitIndex),
@@ -853,10 +863,11 @@ commit_if_can_with_joint_consensus5_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(4, MaybeNewCommitIndex),
@@ -871,10 +882,11 @@ commit_if_can_with_joint_consensus6_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {10, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(3, MaybeNewCommitIndex),
@@ -889,10 +901,11 @@ commit_if_can_with_joint_consensus7_test() ->
   PreviousCommitIndex = 0,
   LogEntries = [{10, "A4"}, {5, "A3"}, {4, "A2"}, {1, "A1"}],
   LeaderTerm = 10,
+  RaftLogCompaction = #raft_log_compaction_metadata{current_start_index=1},
 
   %%% WHEN
   {IsSameWithCurrentTerm, MaybeNewCommitIndex} =
-    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm),
+    raft_rpc_append_entries:commit_if_can(MatchIndex, Members, PreviousCommitIndex, LogEntries, LeaderTerm, RaftLogCompaction),
 
   %%% THEN
   ?assertEqual(0, MaybeNewCommitIndex),

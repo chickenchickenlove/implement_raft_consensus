@@ -5,14 +5,26 @@
 -behaviour(raft_snapshot_interface).
 
 %% API
+-export([get_snapshot/0]).
 -export([create_snapshot/3]).
 -export([upsert_snapshot/1]).
 
 -define(DEFAULT_KEY, raft_snapshot).
 
-create_snapshot(RaftState, LastIncludeIndex, LastIncludedTerm) ->
+get_snapshot() ->
+  MyName = raft_util:my_name(),
+  new_ets_if_not_existed(MyName),
+  Snapshot = ets:lookup(MyName, ?DEFAULT_KEY),
+  case Snapshot of
+    [] -> undefined;
+    [First|_Rest] ->
+      {raft_snapshot, RaftSnapshot} = First,
+      RaftSnapshot
+  end.
+
+create_snapshot(LocalRaftState, LastIncludeIndex, LastIncludedTerm) ->
   #raft_snapshot{
-    raft_state=RaftState,
+    local_raft_state=LocalRaftState,
     last_included_index=LastIncludeIndex,
     last_included_term=LastIncludedTerm
   }.

@@ -3,7 +3,7 @@
 -include("rpc_record.hrl").
 
 %% API
--export([create_snapshot/3]).
+-export([]).
 
 -callback snapshot() ->
   ok.

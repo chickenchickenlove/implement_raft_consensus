@@ -14,7 +14,11 @@ delete(Key) ->
 commands([], LocalRaftState0) ->
   LocalRaftState0;
 commands([FirstCommand|Rest]=_Commands, LocalRaftState0) ->
-  LocalRaftState1 = command(FirstCommand, LocalRaftState0),
+  LocalRaftState1 =
+    case FirstCommand of
+      {_Term, Command} -> command(Command, LocalRaftState0);
+      FirstCommand -> LocalRaftState0
+    end,
   commands(Rest, LocalRaftState1).
 
 %% TODO: declare spec.

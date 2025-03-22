@@ -14,6 +14,7 @@
 -export([assert_node_state_equal_exactly/3]).
 -export([assert_members_equal_exactly/3]).
 -export([flush_msg_/0]).
+-export([get_msg/0]).
 -export([safe_stop_nodes/1]).
 
 
@@ -101,6 +102,13 @@ parse_([Head|Rest]=_Entries, Acc) ->
   {_Term, Data} = Head,
   parse_(Rest, [Data|Acc]).
 
+
+get_msg() ->
+  receive
+    Msg -> Msg
+  after 0 ->
+    no_msg
+  end.
 
 
 flush_msg_() ->
