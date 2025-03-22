@@ -12,12 +12,8 @@ This RAFT implementation supports this features below.
   - Leader Election (Request Vote RPC)
 - RAFT Advanced
   - Joint Consensus. 
-
-This RAFT implementation don't support this features below. 
-- RAFT Advanced.
-  - Install Snapshot.
   - Log Compaction.
-
+  - Install Snapshot.
 
 ## Reference
 - Reference1 : https://raft.github.io/raft.pdf
@@ -25,12 +21,14 @@ This RAFT implementation don't support this features below.
 - pseudo code : https://github.com/ongardie/raft-pseudocode
 
 ## How to Test
-- There are 98 test cases. some test cases may be flaky sometimes.
+- There are 110 test cases. some test cases may be flaky sometimes.
 - Test cases in eunit can cover this action
   - RAFT basic.
   - Split Brain
   - Split Vote
   - Joint Consensus
+  - Log Compaction
+  - Install Snapshot
 
 ```shell
 $ rebar3 eunit
